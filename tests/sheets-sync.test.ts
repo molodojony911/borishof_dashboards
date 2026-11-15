@@ -62,4 +62,32 @@ describe("синхронизация Google Таблицы", () => {
     expect(calls.some((call) => call.url.includes("gid=0"))).toBe(true);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("если export закрыт, читает тот же лист через gviz", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "borishof-gviz-"));
+    process.env.BORISHOF_DATA_DIR = dir;
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes("export?format=csv") && url.includes("gid=373339308")) {
+          return new Response("<html>Sign in</html>", { status: 401 });
+        }
+        if (url.includes("gviz/tq") && url.includes("gid=373339308")) {
+          return new Response(plansSample, { status: 200, headers: { "Content-Type": "text/csv" } });
+        }
+        if (url.includes("gid=0")) {
+          return new Response(sample, { status: 200, headers: { "Content-Type": "text/csv" } });
+        }
+        return new Response("missing", { status: 404 });
+      })
+    );
+    const status = await syncNow();
+    expect(status.lastError).toBe("");
+    expect(loadPlans().rows.length).toBeGreaterThan(0);
+    expect(calls.some((url) => url.includes("gviz/tq") && url.includes("gid=373339308"))).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });

@@ -189,21 +189,37 @@ async function fetchValues(id: string, tab: string, accessToken: string): Promis
   return (json.values || []).map((row) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "").trim()) : []));
 }
 
+function csvLooksClosed(status: number, text: string): boolean {
+  return status === 401 || text.includes("accounts.google.com") || text.includes("Sign in");
+}
+
+function csvLooksUsable(status: number, text: string): boolean {
+  return status >= 200 && status < 300 && !/^\s*</.test(text) && !csvLooksClosed(status, text);
+}
+
+/** Ссылка «для всех» часто отдаёт CSV через gviz, а export?format=csv отвечает 401. */
 async function fetchPublicCsv(id: string, tab: string, gid: string): Promise<string> {
-  const url = gid
-    ? `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/export?format=csv&gid=${encodeURIComponent(gid)}`
-    : `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`;
-  const res = await fetch(url, { redirect: "follow", signal: apiTimeout(20_000) });
-  const text = await res.text();
-  if (!res.ok || /^\s*</.test(text) || text.includes("accounts.google.com") || text.includes("Sign in")) {
-    const closed = res.status === 401 || text.includes("Sign in");
-    throw new Error(
-      closed
-        ? "Лист закрыт (HTTP 401): нужен вход в Google. Откройте доступ «всем, у кого есть ссылка» или задайте GOOGLE_SERVICE_ACCOUNT_JSON только на чтение."
-        : `Таблица не отдаёт CSV (${res.status}). Откройте доступ по ссылке или задайте сервисный аккаунт.`
-    );
+  const base = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}`;
+  const urls = gid
+    ? [
+        `${base}/export?format=csv&gid=${encodeURIComponent(gid)}`,
+        `${base}/gviz/tq?tqx=out:csv&gid=${encodeURIComponent(gid)}`
+      ]
+    : [`${base}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`];
+  const errors: string[] = [];
+  for (const url of urls) {
+    const res = await fetch(url, { redirect: "follow", signal: apiTimeout(20_000) });
+    const text = await res.text();
+    if (csvLooksUsable(res.status, text)) return text;
+    if (csvLooksClosed(res.status, text)) {
+      errors.push("лист закрыт для этого адреса (HTTP 401)");
+      continue;
+    }
+    errors.push(`CSV ${res.status}`);
   }
-  return text;
+  throw new Error(
+    `Таблица не отдаёт CSV (${errors.join("; ")}). Откройте доступ «всем, у кого есть ссылка» или задайте GOOGLE_SERVICE_ACCOUNT_JSON только на чтение.`
+  );
 }
 
 async function pullMatrix(
