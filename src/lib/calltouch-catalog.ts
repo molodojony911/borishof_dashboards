@@ -18,7 +18,7 @@ export interface CalltouchCabinet {
   contractor: string;
 }
 
-/** Публичный справочник кабинетов. Токены — только в data/calltouch-tokens.json */
+/** Публичный справочник кабинетов. Токены — в data/tokens.json, секция calltouch. */
 export const CALLTOUCH_CABINETS: CalltouchCabinet[] = [
   { id: "ct-inchcape", name: "inchcape.ru", url: "inchcape.ru", accountId: "30957", siteId: "46396", brand: "Inchcape", contractor: "" },
   { id: "ct-landrover", name: "LandRover Inchcape", url: "landrover.borishof.ru", accountId: "24714", siteId: "36719", brand: "JLR", contractor: "Tandem" },

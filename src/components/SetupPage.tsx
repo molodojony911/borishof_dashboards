@@ -61,7 +61,7 @@ export function SetupPage() {
     });
     const json = await res.json();
     setSettings(json);
-    setStatus("Сохранено. Токены Calltouch — в data/calltouch-tokens.json, Директ Tandem — в data/direct-tokens.json, RTA и Метрика — в .env.");
+    setStatus("Сохранено. Секреты остаются в data/tokens.json или в переменных окружения и в интерфейс не попадают.");
   }
 
   if (!settings) return <div className="text-sm text-mute">Загрузка настроек…</div>;
@@ -117,7 +117,7 @@ export function SetupPage() {
           <p className="mt-2 text-mute">
             Tandem: <span className="text-paper">YANDEX_DIRECT_TANDEM_OAUTH_TOKEN</span> или JSON{" "}
             <span className="text-paper">YANDEX_DIRECT_TOKENS</span>. Если переменной нет, читается{" "}
-            <code className="text-paper">data/direct-tokens.json</code>. Право{" "}
+            <code className="text-paper">data/tokens.json</code>, секция direct. Право{" "}
             <span className="text-paper">direct:api</span>, для агентских кабинетов обязателен Client-Login.
           </p>
           <p className="mt-2 text-mute">
@@ -137,8 +137,8 @@ export function SetupPage() {
             <span className="text-paper">Сервис</span>. «Новый» не считается «Новый звонок».
           </p>
           <p className="mt-2 text-mute">
-            Токены Calltouch: JSON <span className="text-paper">CALLTOUCH_TOKENS</span> по siteId. Если переменной нет — файл{" "}
-            <code className="text-paper">data/calltouch-tokens.json</code>. В интерфейс они не светятся.
+            Токены Calltouch: JSON <span className="text-paper">CALLTOUCH_TOKENS</span> по siteId. Если переменной нет — секция{" "}
+            <span className="text-paper">calltouch</span> в <code className="text-paper">data/tokens.json</code>. В интерфейс они не светятся.
           </p>
         </li>
         <li>
@@ -225,8 +225,8 @@ export function SetupPage() {
       <h2 className="mb-4 mt-10 font-display text-xl">Кабинеты Calltouch</h2>
       <p className="mb-4 text-sm text-mute">
         {settings.calltouchTokenFromVault
-          ? `Токены найдены в data/calltouch-tokens.json (${settings.hasSecrets?.calltouchFromVault ?? 0} siteId). Поля токена в форме не обязательны.`
-          : "Положите токены в data/calltouch-tokens.json или вставьте в кабинет и сохраните."}
+          ? `Токены Calltouch найдены (${settings.hasSecrets?.calltouchFromVault ?? 0} siteId). Поля токена в форме не обязательны.`
+          : "Положите токены в data/tokens.json или вставьте в кабинет и сохраните."}
       </p>
       <label className="mb-4 flex items-center gap-2 text-sm">
         <input

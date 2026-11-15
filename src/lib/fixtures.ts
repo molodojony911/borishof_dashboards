@@ -304,7 +304,7 @@ export function buildFixture(range: DateRange, filter: DashboardFilter): {
       name: "Яндекс Директ",
       ok: true,
       state: "ok",
-      message: "Демо-выборка кабинетов Tandem и RTA. Живые отчёты включатся, когда появятся токены в .env.local и data/direct-tokens.json."
+      message: "Демо-выборка кабинетов Tandem и RTA. Живые отчёты включатся, когда появятся токены в .env.local или data/tokens.json."
     },
     {
       source: "calltouch",

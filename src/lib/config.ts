@@ -20,6 +20,10 @@ function calltouchTokensPath(): string {
   return dataPath("calltouch-tokens.json");
 }
 
+function unifiedTokensPath(): string {
+  return dataPath("tokens.json");
+}
+
 /** JSON-объект из переменной окружения. Битый JSON не роняет дашборд. */
 export function parseJsonEnv(raw: string | undefined): Record<string, string> {
   const text = (raw || "").trim();
@@ -49,10 +53,12 @@ export function sharedMetrikaToken(): string {
   return (process.env.YANDEX_METRIKA_OAUTH_TOKEN || "").trim();
 }
 
-/** Переменная окружения важнее токена, записанного в карточке счётчика. */
+/** Переменная окружения важнее файла data/tokens.json и токена в карточке счётчика. */
 export function resolveMetrikaToken(accountToken?: string): string {
   const fromEnv = sharedMetrikaToken();
   if (fromEnv) return fromEnv;
+  const fromFile = loadUnifiedTokens().metrika;
+  if (fromFile) return fromFile;
   return (accountToken || "").trim();
 }
 
@@ -75,20 +81,82 @@ export function directTokensFromEnv(): Record<string, string> {
   return map;
 }
 
-export function loadDirectTokens(): Record<string, string> {
+interface UnifiedTokens {
+  metrika: string;
+  direct: Record<string, string>;
+  calltouch: Record<string, string>;
+}
+
+function readJsonFile(file: string): unknown {
   try {
-    const file = tokensPath();
-    if (!fs.existsSync(file)) return {};
-    return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, string>;
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
   } catch {
-    return {};
+    return null;
   }
+}
+
+function asTokenMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "_movedTo") continue;
+    if (typeof item === "string" && item.trim()) out[key] = item.trim();
+  }
+  return out;
+}
+
+/** Старый файл вида {"_movedTo":"data/tokens.json"} — указатель, не набор токенов. */
+function pointerTarget(file: string, parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  if (keys.length !== 1 || keys[0] !== "_movedTo" || typeof obj._movedTo !== "string") return null;
+  const target = obj._movedTo.trim();
+  if (!target) return null;
+  const normalized = target.replace(/\\/g, "/");
+  if (path.basename(normalized) === "tokens.json") return unifiedTokensPath();
+  if (path.isAbsolute(target)) return target;
+  return path.resolve(path.dirname(file), target);
+}
+
+function readUnifiedAt(file: string): UnifiedTokens {
+  const parsed = readJsonFile(file);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { metrika: "", direct: {}, calltouch: {} };
+  }
+  const obj = parsed as Record<string, unknown>;
+  return {
+    metrika: typeof obj.metrika === "string" ? obj.metrika.trim() : "",
+    direct: asTokenMap(obj.direct),
+    calltouch: asTokenMap(obj.calltouch)
+  };
+}
+
+function loadUnifiedTokens(): UnifiedTokens {
+  return readUnifiedAt(unifiedTokensPath());
+}
+
+function readLegacyMap(file: string, section: "direct" | "calltouch", depth = 0): Record<string, string> {
+  if (depth > 3) return {};
+  const parsed = readJsonFile(file);
+  if (parsed == null) return {};
+  const moved = pointerTarget(file, parsed);
+  if (!moved) return asTokenMap(parsed);
+  if (path.basename(moved) === "tokens.json") return readUnifiedAt(moved)[section];
+  return readLegacyMap(moved, section, depth + 1);
+}
+
+/** data/tokens.json перекрывает старые файлы. Указатель _movedTo читается как сам файл. */
+export function loadDirectTokens(): Record<string, string> {
+  return { ...readLegacyMap(tokensPath(), "direct"), ...loadUnifiedTokens().direct };
 }
 
 /**
  * 1. Переменная окружения (именная или YANDEX_DIRECT_TOKENS).
- * 2. data/direct-tokens.json.
- * 3. Поле кабинета в настройках, если это не маска.
+ * 2. data/tokens.json, секция direct.
+ * 3. data/direct-tokens.json, если это не указатель _movedTo.
+ * 4. Поле кабинета в настройках, если это не маска.
  */
 export function resolveDirectToken(account: Pick<DirectAccount, "token" | "contractor">): string {
   const fromEnv = pickToken(directTokensFromEnv(), account.contractor);
@@ -101,13 +169,7 @@ export function resolveDirectToken(account: Pick<DirectAccount, "token" | "contr
 }
 
 export function loadCalltouchTokens(): Record<string, string> {
-  try {
-    const file = calltouchTokensPath();
-    if (!fs.existsSync(file)) return {};
-    return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, string>;
-  } catch {
-    return {};
-  }
+  return { ...readLegacyMap(calltouchTokensPath(), "calltouch"), ...loadUnifiedTokens().calltouch };
 }
 
 /** CALLTOUCH_TOKENS перекрывает файл по тем же siteId. */
@@ -147,10 +209,21 @@ export function persistCalltouchTokens(accounts: CalltouchAccount[]): void {
     changed = true;
   }
   if (!changed) return;
-  const file = calltouchTokensPath();
-  const dir = path.dirname(file);
+  const legacy = calltouchTokensPath();
+  const unified = unifiedTokensPath();
+  if (fs.existsSync(unified) || pointerTarget(legacy, readJsonFile(legacy))) {
+    const parsed = readJsonFile(unified);
+    const base =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed) ? { ...(parsed as Record<string, unknown>) } : {};
+    base.calltouch = { ...asTokenMap(base.calltouch), ...vault };
+    const dir = path.dirname(unified);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(unified, JSON.stringify(base, null, 2), "utf8");
+    return;
+  }
+  const dir = path.dirname(legacy);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(vault, null, 2), "utf8");
+  fs.writeFileSync(legacy, JSON.stringify(vault, null, 2), "utf8");
 }
 
 export function seedFromCatalog(base: AppSettings): AppSettings {
