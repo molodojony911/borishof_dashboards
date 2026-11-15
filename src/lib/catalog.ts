@@ -1,4 +1,5 @@
-﻿import type { DirectAccount, Line, MetrikaAccount } from "./types";
+﻿import { canonicalBrand, sameBrand } from "./brand-alias";
+import type { DirectAccount, Line, MetrikaAccount } from "./types";
 
 export interface CatalogAccount {
   id: string;
@@ -253,7 +254,7 @@ export const ACCOUNTS: CatalogAccount[] = [
   },
   {
     id: "rta-nc-exeed",
-    brand: "EXEED",
+    brand: "Exeed + Esteo",
     line: "nc",
     contractor: "RTA",
     clientLogin: "porg-4uklaahu",
@@ -338,7 +339,7 @@ export const ACCOUNTS: CatalogAccount[] = [
   },
   {
     id: "rta-afs-exeed",
-    brand: "EXEED",
+    brand: "Exeed + Esteo",
     line: "afs",
     contractor: "RTA",
     clientLogin: "porg-7gc3rmkf",
@@ -423,14 +424,14 @@ export function parseFilters(get: (key: string) => string | null): DashboardFilt
   return {
     contractor: get("contractor") || "",
     line: line === "nc" || line === "afs" ? line : "",
-    brand: get("brand") || ""
+    brand: canonicalBrand(get("brand") || "")
   };
 }
 
 export function matchAccount(acc: CatalogAccount, f: DashboardFilter): boolean {
   if (f.contractor && acc.contractor !== f.contractor) return false;
   if (f.line && acc.line !== f.line) return false;
-  if (f.brand && acc.brand !== f.brand) return false;
+  if (f.brand && !sameBrand(acc.brand, f.brand)) return false;
   return true;
 }
 
@@ -439,7 +440,7 @@ export function findAccount(login: string, brand?: string): CatalogAccount | und
   return ACCOUNTS.find((a) => {
     const logins = [a.clientLogin, ...(a.legacyLogins || [])].map((x) => x.toLowerCase());
     if (!logins.includes(needle)) return false;
-    if (brand && a.brand !== brand) return false;
+    if (brand && !sameBrand(a.brand, brand)) return false;
     return true;
   });
 }

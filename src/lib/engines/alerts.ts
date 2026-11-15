@@ -15,6 +15,7 @@ import { ruleRef } from "../knowledge/rules";
 import { median, robustZ } from "../stats";
 import type { MetrikaGoalCounter } from "../goals-file";
 import { ACCOUNTS } from "../catalog";
+import { sameBrand } from "../brand-alias";
 import type { FactSlice, PlanRow } from "../plan-model";
 import { daysInMonth } from "../plan-model";
 
@@ -685,7 +686,7 @@ export function buildPlanRunRateAlerts(
     const matched = facts.filter(
       (fact) =>
         fact.contractor === plan.contractor &&
-        fact.brand === plan.brand &&
+        sameBrand(fact.brand, plan.brand) &&
         (plan.line === "" || fact.line === plan.line)
     );
     const factLeads = matched.reduce((sum, fact) => sum + fact.leads, 0);

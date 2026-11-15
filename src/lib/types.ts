@@ -375,6 +375,8 @@ export interface BrandSummary {
 /** Визиты одного проекта (бренд + линия + сайт) из счётчика Метрики. */
 export interface ProjectVisit {
   projectId: string;
+  /** «HAVAL · NC · продажи» — в ответе API поле не должно быть пустым. */
+  name: string;
   brand: string;
   line: Line;
   contractor: string;

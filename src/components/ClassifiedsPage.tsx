@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PageIntro } from "./ui";
 import { money, num, pct } from "@/lib/format";
+import { canonicalBrand, exeedEsteoKind } from "@/lib/brand-alias";
 import { fulfillment } from "@/lib/plan-model";
 import type { ClassifiedProject, PlatformForecast, WalletTopup, ClassifiedRow } from "@/lib/plan-model";
 
@@ -39,7 +40,14 @@ function pieces(value: number | null): string {
 
 export function ClassifiedsPage() {
   const search = useSearchParams();
-  const brand = (search.get("brand") || "").trim().toLowerCase();
+  const brandQuery = (search.get("brand") || "").trim();
+  const brand = brandQuery.toLowerCase();
+  const family = exeedEsteoKind(brandQuery) !== "other";
+  const matchesProject = (project: string) => {
+    if (!brandQuery) return true;
+    if (family) return exeedEsteoKind(project) !== "other" || canonicalBrand(project) === canonicalBrand(brandQuery);
+    return project.toLowerCase().includes(brand);
+  };
   const [data, setData] = useState<Payload | null>(null);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [message, setMessage] = useState("");
@@ -65,10 +73,12 @@ export function ClassifiedsPage() {
 
   const projects = (data?.projects || []).filter((row) => {
     if (row.kind === "total") return !brand;
-    if (!brand) return true;
-    return row.project.toLowerCase().includes(brand);
+    if (!brandQuery) return true;
+    return matchesProject(row.project);
   });
-  const flat = (data?.rows || []).filter((row) => !brand || row.brand.toLowerCase().includes(brand) || row.platform.toLowerCase().includes(brand));
+  const flat = (data?.rows || []).filter(
+    (row) => !brandQuery || matchesProject(row.brand) || (!family && row.platform.toLowerCase().includes(brand))
+  );
 
   return (
     <>
@@ -184,7 +194,7 @@ export function ClassifiedsPage() {
               </thead>
               <tbody>
                 {(data?.platformForecast || [])
-                  .filter((row) => !brand || row.project.toLowerCase().includes(brand))
+                  .filter((row) => matchesProject(row.project))
                   .map((row) => (
                     <tr key={`${row.project}-${row.platform}`} className="border-t border-white/[0.06]">
                       <td className="py-2">{row.project}</td>
@@ -217,7 +227,7 @@ export function ClassifiedsPage() {
               </thead>
               <tbody>
                 {(data?.wallets || [])
-                  .filter((row) => !brand || row.project.toLowerCase().includes(brand))
+                  .filter((row) => matchesProject(row.project))
                   .map((row) => (
                     <tr key={row.project} className="border-t border-white/[0.06]">
                       <td className="py-2">{row.project}</td>

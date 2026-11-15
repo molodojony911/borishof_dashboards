@@ -13,6 +13,7 @@ import { loadPlans } from "./plan-store";
 import { fetchDirectCampaigns } from "./connectors/direct";
 import { fetchCalltouchLeads } from "./connectors/calltouch";
 import { emptyBehavior, fetchMetrikaBehavior } from "./connectors/metrika";
+import { sameBrand } from "./brand-alias";
 import { ACCOUNTS, emptyFilter, matchAccount, type DashboardFilter } from "./catalog";
 import { classifyCalltouchTags } from "./calltouch-catalog";
 import type {
@@ -42,7 +43,7 @@ function matchRow(
 ): boolean {
   if (f.contractor && row.contractor !== f.contractor) return false;
   if (f.line && row.line !== f.line) return false;
-  if (f.brand && row.brand !== f.brand) return false;
+  if (f.brand && !sameBrand(row.brand, f.brand)) return false;
   return true;
 }
 
@@ -532,7 +533,7 @@ export async function buildDashboard(
   const liveBits = { direct: false, calltouch: false, metrika: false };
   const calltouchAccounts = settings.calltouch.filter((acc) => {
     if (!acc.siteId || !resolveCalltouchToken(acc)) return false;
-    if (filter.brand && acc.brand !== filter.brand) return false;
+    if (filter.brand && !sameBrand(acc.brand, filter.brand)) return false;
     if (filter.contractor && acc.contractor && acc.contractor !== filter.contractor) return false;
     return true;
   });
@@ -745,7 +746,7 @@ function finalize(
   const planRows = loadPlans().rows.filter((plan) => {
     if (plan.month !== month) return false;
     if (filter.contractor && plan.contractor !== filter.contractor) return false;
-    if (filter.brand && plan.brand !== filter.brand) return false;
+    if (filter.brand && !sameBrand(plan.brand, filter.brand)) return false;
     if (filter.line && plan.line && plan.line !== filter.line) return false;
     return true;
   });

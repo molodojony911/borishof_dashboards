@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { dataPath } from "./paths";
 
+import { sameBrand } from "./brand-alias";
 import { emptyFilter } from "./catalog";
 import { loadSettings, resolveDirectToken } from "./config";
 import {
@@ -72,7 +73,7 @@ function writeCache(range: DateRange, filter: DashboardFilter, payload: DirectDe
 function matches(acc: { contractor: string; brand: string; line?: string | null }, f: DashboardFilter): boolean {
   if (f.contractor && acc.contractor !== f.contractor) return false;
   if (f.line && (acc.line || "nc") !== f.line) return false;
-  if (f.brand && acc.brand !== f.brand) return false;
+  if (f.brand && !sameBrand(acc.brand, f.brand)) return false;
   return true;
 }
 
