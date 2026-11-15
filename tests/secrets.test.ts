@@ -2,7 +2,15 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSettings, resolveCalltouchToken, resolveDirectToken, resolveMetrikaToken } from "../src/lib/config";
+import {
+  loadCalltouchTokens,
+  loadDirectTokens,
+  loadSettings,
+  persistCalltouchTokens,
+  resolveCalltouchToken,
+  resolveDirectToken,
+  resolveMetrikaToken
+} from "../src/lib/config";
 
 const KEYS = [
   "BORISHOF_DATA_DIR",
@@ -40,6 +48,54 @@ describe("секреты из окружения", () => {
     fs.rmSync(path.join(dir, "direct-tokens.json"));
     fs.rmSync(path.join(dir, "calltouch-tokens.json"));
     expect(resolveDirectToken({ contractor: "Tandem", token: "from-ui" })).toBe("from-ui");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("читает data/tokens.json и указатель _movedTo, окружение остаётся важнее", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "borishof-secrets-"));
+    process.env.BORISHOF_DATA_DIR = dir;
+    fs.writeFileSync(
+      path.join(dir, "tokens.json"),
+      JSON.stringify({
+        metrika: "metrika-file",
+        direct: { Tandem: "tandem-file", RTA: "rta-file" },
+        calltouch: { "47639": "call-file" }
+      })
+    );
+    fs.writeFileSync(path.join(dir, "direct-tokens.json"), JSON.stringify({ _movedTo: "data/tokens.json" }));
+    fs.writeFileSync(path.join(dir, "calltouch-tokens.json"), JSON.stringify({ _movedTo: "data/tokens.json" }));
+    expect(loadDirectTokens()).toEqual({ Tandem: "tandem-file", RTA: "rta-file" });
+    expect(loadCalltouchTokens()).toEqual({ "47639": "call-file" });
+    expect(resolveMetrikaToken("from-ui")).toBe("metrika-file");
+    expect(resolveDirectToken({ contractor: "Tandem", token: "from-ui" })).toBe("tandem-file");
+    expect(resolveDirectToken({ contractor: "RTA", token: "" })).toBe("rta-file");
+    expect(resolveCalltouchToken({ siteId: "47639", token: "from-ui" })).toBe("call-file");
+    process.env.YANDEX_METRIKA_OAUTH_TOKEN = "metrika-env";
+    process.env.YANDEX_DIRECT_TANDEM_OAUTH_TOKEN = "tandem-env";
+    process.env.CALLTOUCH_TOKENS = JSON.stringify({ "47639": "call-env" });
+    expect(resolveMetrikaToken("metrika-file")).toBe("metrika-env");
+    expect(resolveDirectToken({ contractor: "Tandem", token: "tandem-file" })).toBe("tandem-env");
+    expect(resolveCalltouchToken({ siteId: "47639", token: "call-file" })).toBe("call-env");
+    delete process.env.YANDEX_METRIKA_OAUTH_TOKEN;
+    delete process.env.YANDEX_DIRECT_TANDEM_OAUTH_TOKEN;
+    delete process.env.CALLTOUCH_TOKENS;
+    fs.writeFileSync(path.join(dir, "direct-tokens.json"), JSON.stringify({ Tandem: "legacy-tandem", RTA: "legacy-rta" }));
+    expect(resolveDirectToken({ contractor: "Tandem", token: "" })).toBe("tandem-file");
+    persistCalltouchTokens([
+      { id: "ct", name: "cabinet", siteId: "82756", token: "new-site", brand: "Exeed", qualityTags: [] }
+    ]);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "calltouch-tokens.json"), "utf8"))).toEqual({
+      _movedTo: "data/tokens.json"
+    });
+    const unified = JSON.parse(fs.readFileSync(path.join(dir, "tokens.json"), "utf8")) as {
+      metrika: string;
+      direct: { Tandem: string };
+      calltouch: Record<string, string>;
+    };
+    expect(unified.metrika).toBe("metrika-file");
+    expect(unified.direct.Tandem).toBe("tandem-file");
+    expect(unified.calltouch["47639"]).toBe("call-file");
+    expect(unified.calltouch["82756"]).toBe("new-site");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

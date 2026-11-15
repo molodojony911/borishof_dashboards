@@ -27,7 +27,7 @@ export const LINE_LABEL: Record<Line, string> = {
 
 export const CONTRACTORS = ["Tandem", "RTA"] as const;
 
-/** Справочник холдинга из рабочих таблиц подрядчиков. Токены Директа лежат отдельно, в data/direct-tokens.json. */
+/** Справочник холдинга из рабочих таблиц подрядчиков. Токены Директа — в data/tokens.json, секция direct. */
 export const ACCOUNTS: CatalogAccount[] = [
   {
     id: "tandem-nc-haval",

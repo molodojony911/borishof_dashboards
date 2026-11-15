@@ -87,7 +87,7 @@ Reporting API не отдаёт записи Вебвизора. В коде э�
 2. Откройте PowerShell в папке проекта.
 3. `npm install`
 4. `copy .env.example .env.local` и впишите токены, если они есть. Без них экраны открываются с пустыми цифрами.
-5. Токен Tandem, если он отдельный от RTA, положите в `data\direct-tokens.json`. Calltouch — в `data\calltouch-tokens.json`. Оба файла в git не входят.
+5. Токены можно положить в `data\tokens.json`: `metrika`, `direct` (Tandem и RTA) и `calltouch` по siteId. Файл в git не входит. Старые `direct-tokens.json` и `calltouch-tokens.json` тоже читаются; `{"_movedTo":"data/tokens.json"}` — это указатель на единый файл.
 6. `npm test` — должны пройти тесты движков и сборки без токенов. Тесты не читают ваш `.env` и `data\*.json`: сеть в них заглушена.
 7. `npm run dev` и откройте http://localhost:3010
 8. Проверка продакшен-сборки: `npm run build`, затем `npm start`.
