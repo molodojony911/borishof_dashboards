@@ -6,9 +6,9 @@ import { useSearchParams } from "next/navigation";
 import { ACCOUNTS, LINE_LABEL } from "@/lib/catalog";
 import { PageIntro } from "./ui";
 import { buildQuery } from "@/lib/href";
-import { money, num, pct } from "@/lib/format";
+import { money, num } from "@/lib/format";
 import { eachDate } from "@/lib/period";
-import { factsFromDashboard, fulfillment, joinPlanFact, type PlanRow } from "@/lib/plan-model";
+import { factsFromDashboard, joinPlanFact, type PlanRow } from "@/lib/plan-model";
 import { useDashboard } from "./useDashboard";
 
 export function BrandsPage() {
@@ -65,8 +65,8 @@ export function BrandsPage() {
                   <th className="py-2 font-normal">Login Директа</th>
                   <th className="py-2 font-normal">Счётчик Метрики</th>
                   <th className="py-2 font-normal">Визиты</th>
-                  <th className="py-2 font-normal">План / факт расход</th>
-                  <th className="py-2 font-normal">План / факт лиды</th>
+                  <th className="py-2 font-normal">План РЛ / прогноз</th>
+                  <th className="py-2 font-normal">План CPL / факт</th>
                   <th className="py-2 font-normal">Сайт</th>
                   <th className="py-2 font-normal">Бюджет/мес</th>
                 </tr>
@@ -88,19 +88,18 @@ export function BrandsPage() {
                       {visitsOf(row.id)?.sharedCounter ? <div className="text-[11px] text-mute">общий счётчик</div> : null}
                     </td>
                     <td>
-                      {planOf(row)?.periodSpend != null ? (
+                      {planOf(row)?.leads != null ? (
                         <span>
-                          {money(planOf(row)?.periodSpend || 0)} / {money(planOf(row)?.factSpend || 0)}{" "}
-                          <span className="text-mute">{pct(fulfillment(planOf(row)?.factSpend || 0, planOf(row)?.periodSpend ?? null) || 0, 0)}</span>
+                          {num(planOf(row)?.leads || 0)} / {num(Math.round(planOf(row)?.forecastLeads || 0))}
                         </span>
                       ) : (
                         "—"
                       )}
                     </td>
                     <td>
-                      {planOf(row)?.periodLeads != null ? (
+                      {planOf(row)?.cpl != null ? (
                         <span>
-                          {num(planOf(row)?.periodLeads || 0)} / {num(planOf(row)?.factLeads || 0)}
+                          {money(planOf(row)?.cpl || 0)} / {planOf(row)?.factCpl != null ? money(planOf(row)?.factCpl || 0) : "—"}
                         </span>
                       ) : (
                         "—"

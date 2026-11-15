@@ -326,6 +326,26 @@ export function SetupPage() {
           onChange={(v) => setSettings({ ...settings, thresholds: { ...settings.thresholds, budgetPaceOverPct: Number(v) || 0 } })}
         />
         <Field
+          label="Недобор РЛ к плану, %"
+          value={String(settings.thresholds.planRlUnderPct ?? DEFAULT_THRESHOLDS.planRlUnderPct)}
+          onChange={(v) => setSettings({ ...settings, thresholds: { ...settings.thresholds, planRlUnderPct: Number(v) || 0 } })}
+        />
+        <Field
+          label="Недобор РЛ, critical %"
+          value={String(settings.thresholds.planRlCriticalPct ?? DEFAULT_THRESHOLDS.planRlCriticalPct)}
+          onChange={(v) => setSettings({ ...settings, thresholds: { ...settings.thresholds, planRlCriticalPct: Number(v) || 0 } })}
+        />
+        <Field
+          label="CPL выше плана, %"
+          value={String(settings.thresholds.planCplOverPct ?? DEFAULT_THRESHOLDS.planCplOverPct)}
+          onChange={(v) => setSettings({ ...settings, thresholds: { ...settings.thresholds, planCplOverPct: Number(v) || 0 } })}
+        />
+        <Field
+          label="CPL выше плана, critical %"
+          value={String(settings.thresholds.planCplCriticalPct ?? DEFAULT_THRESHOLDS.planCplCriticalPct)}
+          onChange={(v) => setSettings({ ...settings, thresholds: { ...settings.thresholds, planCplCriticalPct: Number(v) || 0 } })}
+        />
+        <Field
           label="Z-score аномалии (0 выкл.)"
           value={String(settings.thresholds.anomalyZ)}
           onChange={(v) => setSettings({ ...settings, thresholds: { ...settings.thresholds, anomalyZ: Number(v) || 0 } })}

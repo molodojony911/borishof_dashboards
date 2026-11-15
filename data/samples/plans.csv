@@ -1,7 +1,10 @@
-month,contractor,brand,line,spend,leads,visits
-2026-11,Tandem,HAVAL,nc,1500000,300,40000
-2026-11,Tandem,HAVAL,afs,120000,40,9000
-2026-11,Tandem,TOYOTA,nc,500000,80,15000
-2026-11,RTA,BMW,nc,1000000,150,22000
-2026-11,RTA,BMW,afs,150000,35,7000
-2026-11,RTA,BELGEE,nc,800000,90,18000
+Подрядчик,Бренд,Линия,Показатель,2026-09,2026-10,ноя 2026
+Tandem,HAVAL,nc,План РЛ,280,290,300
+Tandem,HAVAL,nc,Факт РЛ,100,110,120
+Tandem,HAVAL,nc,План CPL,4000,4200,4500
+Tandem,HAVAL,nc,План расход,900000,950000,1000000
+Tandem,HAVAL,nc,План визиты,30000,32000,40000
+Tandem,HAVAL,afs,План РЛ,30,35,40
+Tandem,HAVAL,afs,План CPL,2500,2600,2700
+RTA,BMW,nc,План РЛ,140,145,150
+RTA,BMW,nc,План CPL,5000,5100,5200

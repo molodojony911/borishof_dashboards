@@ -15,6 +15,8 @@ import { ruleRef } from "../knowledge/rules";
 import { median, robustZ } from "../stats";
 import type { MetrikaGoalCounter } from "../goals-file";
 import { ACCOUNTS } from "../catalog";
+import type { FactSlice, PlanRow } from "../plan-model";
+import { daysInMonth } from "../plan-model";
 
 export interface AlertBudget {
   brand: string;
@@ -659,4 +661,89 @@ function budgetAlerts(
     }
   }
   return out;
+}
+
+/** Прогноз на конец месяца при текущем темпе окна. Для CPL темп числителя и знаменателя сокращается. */
+export function runRateLeads(fact: number, periodDays: number, monthDays: number): number {
+  if (periodDays <= 0) return 0;
+  return (fact / periodDays) * monthDays;
+}
+
+export function buildPlanRunRateAlerts(
+  plans: PlanRow[],
+  facts: FactSlice[],
+  month: string,
+  periodDays: number,
+  rawThresholds: AlertThresholds
+): AlertItem[] {
+  const thresholds = fillThresholds(rawThresholds);
+  if (periodDays < thresholds.planRunRateMinDays) return [];
+  const monthDays = daysInMonth(month);
+  const alerts: AlertItem[] = [];
+  for (const plan of plans) {
+    if (plan.month !== month) continue;
+    const matched = facts.filter(
+      (fact) =>
+        fact.contractor === plan.contractor &&
+        fact.brand === plan.brand &&
+        (plan.line === "" || fact.line === plan.line)
+    );
+    const factLeads = matched.reduce((sum, fact) => sum + fact.leads, 0);
+    const factSpend = matched.reduce((sum, fact) => sum + fact.spend, 0);
+    const label = [plan.brand, plan.line ? plan.line.toUpperCase() : "", plan.contractor].filter(Boolean).join(" · ");
+    const idBase = `${plan.contractor}|${plan.brand}|${plan.line || "all"}`;
+    if (thresholds.planRlUnderPct > 0 && plan.leads != null && plan.leads >= 10) {
+      const forecast = runRateLeads(factLeads, periodDays, monthDays);
+      const gap = plan.leads - forecast;
+      const underPct = (gap / plan.leads) * 100;
+      if (underPct >= thresholds.planRlUnderPct && gap >= thresholds.planRunRateMinLeads) {
+        const critical = underPct >= thresholds.planRlCriticalPct && gap >= thresholds.planRunRateMinLeads * 2;
+        alerts.push({
+          id: `plan-rl-${idBase}`,
+          metric: "plan",
+          entity: `${label} · РЛ`,
+          current: forecast,
+          previous: plan.leads,
+          changePct: -underPct,
+          thresholdPct: critical ? thresholds.planRlCriticalPct : thresholds.planRlUnderPct,
+          direction: "down",
+          severity: critical ? "critical" : "warning",
+          message: `Темп даёт к концу месяца ${Math.round(forecast)} результативных лидов при плане ${Math.round(plan.leads)} (−${underPct.toFixed(0)}%). За ${periodDays} дн. факт ${Math.round(factLeads)}.`,
+          explanation: `РЛ — план результативных лидов на месяц. Прогноз = факт окна × дни месяца / дни окна. Алерт с ${thresholds.planRlUnderPct}%, critical с ${thresholds.planRlCriticalPct}%, и только если не хватает хотя бы ${thresholds.planRunRateMinLeads} лидов. Окно короче ${thresholds.planRunRateMinDays} дней не экстраполируем.`,
+          baseline: `План РЛ ${Math.round(plan.leads)} на ${month}, темп с ${periodDays} дн.`,
+          moneyAtStake: plan.cpl != null ? gap * plan.cpl : undefined,
+          role: "analyst",
+          ...withRule("plan.run-rate", "Сверьте показы и долю целевых тегов, прежде чем поднимать ставку.")
+        });
+      }
+    }
+    if (thresholds.planCplOverPct > 0 && plan.cpl != null && plan.cpl > 0 && factLeads >= thresholds.planRunRateMinLeads) {
+      const factCpl = factSpend / factLeads;
+      const overPct = ((factCpl - plan.cpl) / plan.cpl) * 100;
+      const extra = (factCpl - plan.cpl) * factLeads;
+      if (overPct >= thresholds.planCplOverPct && extra >= 8000) {
+        const critical = overPct >= thresholds.planCplCriticalPct && extra >= 20000;
+        alerts.push({
+          id: `plan-cpl-${idBase}`,
+          metric: "plan",
+          entity: `${label} · CPL`,
+          current: factCpl,
+          previous: plan.cpl,
+          changePct: overPct,
+          thresholdPct: critical ? thresholds.planCplCriticalPct : thresholds.planCplOverPct,
+          direction: "up",
+          severity: critical ? "critical" : "warning",
+          message: `CPL ${rub(factCpl)} против плана ${rub(plan.cpl)} (+${overPct.toFixed(0)}%). На темпе месяца цена лида не снизится сама: расход и РЛ растут вместе.`,
+          explanation: `План CPL сравнивается с расходом Директа на результативный лид Calltouch за выбранное окно. Алерт с +${thresholds.planCplOverPct}% и переплатой от 8 000 ₽, critical с +${thresholds.planCplCriticalPct}% и 20 000 ₽. Меньше ${thresholds.planRunRateMinLeads} лидов — шум.`,
+          baseline: `План CPL ${rub(plan.cpl)} на ${month}`,
+          moneyAtStake: extra,
+          role: "analyst",
+          ...withRule("plan.run-rate", "Сузьте нецелевые запросы и площадки, цель стратегии не сбрасывайте пачкой.")
+        });
+      }
+    }
+  }
+  return alerts
+    .sort((a, b) => (b.moneyAtStake || 0) - (a.moneyAtStake || 0) || Math.abs(b.changePct) - Math.abs(a.changePct))
+    .slice(0, 8);
 }

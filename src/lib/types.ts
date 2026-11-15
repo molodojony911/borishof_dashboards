@@ -206,7 +206,8 @@ export type AlertMetric =
   | "tracking"
   | "goals"
   | "impressions"
-  | "budget";
+  | "budget"
+  | "plan";
 
 export interface AlertItem {
   id: string;
@@ -492,6 +493,17 @@ export interface AlertThresholds {
   minCallsBaseline: number;
   /** Минимум показов в прошлом периоде, чтобы ноль показов сейчас был алертом. */
   zeroImpressionMinPrev: number;
+  /** Прогноз РЛ к концу месяца ниже плана на столько процентов. 0 выключает проверку. */
+  planRlUnderPct: number;
+  /** То же отклонение, но уже critical. */
+  planRlCriticalPct: number;
+  /** Прогнозный CPL выше плана на столько процентов. 0 выключает проверку. */
+  planCplOverPct: number;
+  planCplCriticalPct: number;
+  /** Короткое окно не экстраполируем: темп ещё не устоялся. */
+  planRunRateMinDays: number;
+  /** Меньше стольких результативных лидов в окне — CPL и недобор РЛ не считаем. */
+  planRunRateMinLeads: number;
 }
 
 export interface AppSettings {

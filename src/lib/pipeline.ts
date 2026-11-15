@@ -4,10 +4,12 @@ import { loadSettings, hasLiveSources, resolveCalltouchToken, resolveDirectToken
 import { DEFAULT_QUALITY_TAGS } from "./defaults";
 import { eachDate, parsePeriod, rangeFor } from "./period";
 import { deltaPct, safeDiv } from "./format";
-import { buildAlerts, computeCampaign } from "./engines/alerts";
+import { buildAlerts, buildPlanRunRateAlerts, computeCampaign } from "./engines/alerts";
 import { buildInsights } from "./engines/insights";
 import { buildHypotheses } from "./engines/hypotheses";
 import { loadMetrikaGoals } from "./goals-file";
+import { factsFromDashboard } from "./plan-model";
+import { loadPlans } from "./plan-store";
 import { fetchDirectCampaigns } from "./connectors/direct";
 import { fetchCalltouchLeads } from "./connectors/calltouch";
 import { emptyBehavior, fetchMetrikaBehavior } from "./connectors/metrika";
@@ -739,23 +741,40 @@ function finalize(
     byCampaign: payload.behavior?.byCampaign || []
   };
   const leads = payload.leads;
-  const alerts = buildAlerts(
-    payload.campaigns || [],
-    behavior,
-    leads?.quality || 0,
-    leads?.previousQuality || 0,
-    leads?.total || 0,
-    leads?.previousTotal || 0,
-    settings.thresholds,
-    {
-      series: payload.series || [],
-      totalLeadsNow: (payload.campaigns || []).reduce((s, c) => s + c.totalLeads, 0),
-      totalLeadsPrev: (payload.campaigns || []).reduce((s, c) => s + c.previousTotalLeads, 0),
-      goals: loadMetrikaGoals({ sample: false }),
-      budgets,
-      periodDays: days
-    }
-  );
+  const month = range.to.slice(0, 7);
+  const planRows = loadPlans().rows.filter((plan) => {
+    if (plan.month !== month) return false;
+    if (filter.contractor && plan.contractor !== filter.contractor) return false;
+    if (filter.brand && plan.brand !== filter.brand) return false;
+    if (filter.line && plan.line && plan.line !== filter.line) return false;
+    return true;
+  });
+  const alerts = [
+    ...buildAlerts(
+      payload.campaigns || [],
+      behavior,
+      leads?.quality || 0,
+      leads?.previousQuality || 0,
+      leads?.total || 0,
+      leads?.previousTotal || 0,
+      settings.thresholds,
+      {
+        series: payload.series || [],
+        totalLeadsNow: (payload.campaigns || []).reduce((s, c) => s + c.totalLeads, 0),
+        totalLeadsPrev: (payload.campaigns || []).reduce((s, c) => s + c.previousTotalLeads, 0),
+        goals: loadMetrikaGoals({ sample: false }),
+        budgets,
+        periodDays: days
+      }
+    ),
+    ...buildPlanRunRateAlerts(
+      planRows,
+      factsFromDashboard(payload.campaigns || [], []),
+      month,
+      days,
+      settings.thresholds
+    )
+  ];
   return {
     ...payload,
     behavior,

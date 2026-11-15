@@ -88,9 +88,13 @@ function writeStatus(patch: Partial<SheetsSyncStatus>): SheetsSyncStatus {
 
 /** Публичный id листа классифайдов. Это не секрет: таблица открыта по ссылке. */
 export const DEFAULT_CLASSIFIEDS_SHEET_ID = "1mieIw-b8wnJVvRJrbr9onoLMItHWHwESYEf5QIqqC8I";
+/** Сводный отчёт подрядчиков. Сам лист закрыт, id не секрет. */
+export const DEFAULT_PLANS_SHEET_ID = "14K-fcAEl-oP2-SSfbFyrD1I9lCQm5FVyTyRHHHGXZTU";
+export const DEFAULT_PLANS_GID = "373339308";
 
 export function sheetsTargets(): {
   id: string;
+  plansId: string;
   usingDefaultId: boolean;
   plansEnabled: boolean;
   plansTab: string;
@@ -99,14 +103,16 @@ export function sheetsTargets(): {
   classifiedsGid: string;
 } {
   const fromEnv = (process.env.GOOGLE_SHEETS_ID || "").trim();
+  const plansId = (process.env.GOOGLE_SHEETS_PLANS_ID || "").trim() || DEFAULT_PLANS_SHEET_ID;
   const plansTab = (process.env.GOOGLE_SHEETS_PLANS_TAB || "").trim();
-  const plansGid = (process.env.GOOGLE_SHEETS_PLANS_GID || "").trim();
+  const plansGid = (process.env.GOOGLE_SHEETS_PLANS_GID ?? DEFAULT_PLANS_GID).trim() || DEFAULT_PLANS_GID;
   const classifiedsGid = (process.env.GOOGLE_SHEETS_CLASSIFIEDS_GID ?? "0").trim();
   return {
     id: fromEnv || DEFAULT_CLASSIFIEDS_SHEET_ID,
+    plansId,
     usingDefaultId: !fromEnv,
-    plansEnabled: Boolean(plansTab || plansGid),
-    plansTab: plansTab || "plans",
+    plansEnabled: Boolean(plansId && (plansGid || plansTab)),
+    plansTab,
     classifiedsTab: (process.env.GOOGLE_SHEETS_CLASSIFIEDS_TAB || "").trim(),
     plansGid,
     classifiedsGid: classifiedsGid || "0"
@@ -189,9 +195,12 @@ async function fetchPublicCsv(id: string, tab: string, gid: string): Promise<str
     : `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`;
   const res = await fetch(url, { redirect: "follow", signal: apiTimeout(20_000) });
   const text = await res.text();
-  if (!res.ok || /^\s*</.test(text) || text.includes("accounts.google.com")) {
+  if (!res.ok || /^\s*</.test(text) || text.includes("accounts.google.com") || text.includes("Sign in")) {
+    const closed = res.status === 401 || text.includes("Sign in");
     throw new Error(
-      `Таблица не отдаёт CSV (${res.status}). Откройте доступ «всем, у кого есть ссылка» или задайте сервисный аккаунт.`
+      closed
+        ? "Лист закрыт (HTTP 401): нужен вход в Google. Откройте доступ «всем, у кого есть ссылка» или задайте GOOGLE_SERVICE_ACCOUNT_JSON только на чтение."
+        : `Таблица не отдаёт CSV (${res.status}). Откройте доступ по ссылке или задайте сервисный аккаунт.`
     );
   }
   return text;
@@ -253,10 +262,13 @@ async function runSync(): Promise<SheetsSyncStatus> {
   let source: SheetsSyncStatus["source"] = "";
   if (target.plansEnabled) {
     try {
-      const plans = await pullMatrix(target.id, target.plansTab, target.plansGid);
-      const rows = matrixToPlans(plans.matrix);
-      if (!rows.length) problems.push(`Лист планов «${target.plansTab || target.plansGid}»: нет строк. Нужны колонки month, contractor, brand, line, spend, leads, visits.`);
-      else savePlans(rows, "sheet");
+      const plans = await pullMatrix(target.plansId, target.plansTab, target.plansGid);
+      const rows = matrixToPlans(plans.matrix, { onlyRlCpl: true });
+      if (!rows.length) {
+        problems.push(
+          "Лист планов пуст или заголовки не узнаны. Нужны «План РЛ» и «План CPL» (или колонка «Показатель» и месяцы). Остальные метрики не импортируются."
+        );
+      } else savePlans(rows, "sheet");
       source = plans.source;
     } catch (e) {
       problems.push(`Планы: ${e instanceof Error ? e.message : "ошибка"}`);
