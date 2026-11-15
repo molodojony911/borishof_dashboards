@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg: #07080a;
+  --line: rgba(237, 234, 227, 0.08);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: #edeae3;
+  min-height: 100%;
+}
+
+body {
+  font-feature-settings: "ss01" on, "kern" on;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #252b38 transparent;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: #c4a35a;
+  color: #07080a;
+}
