@@ -9,8 +9,21 @@ import { DEFAULT_THRESHOLDS } from "../src/lib/defaults";
 describe("планы и классифайды", () => {
   it("понимает деньги с неразрывным пробелом и процент", () => {
     expect(parseNumberCell("144\u00a0000₽")).toBe(144000);
+    expect(parseNumberCell("500 000,00 ₽")).toBe(500000);
+    expect(parseNumberCell("36,4%")).toBe(36.4);
     expect(parseNumberCell("40,00%")).toBe(40);
     expect(parseNumberCell("—")).toBeNull();
+  });
+
+  it("читает сводку Борисхоф: SALES это NC, AFTERSALES это AFS, только план", () => {
+    const matrix = parseCsv(fs.readFileSync(path.join(process.cwd(), "data/samples/plans-summary.csv"), "utf8"));
+    const plans = matrixToPlans(matrix, { onlyRlCpl: true });
+    expect(plans).toHaveLength(3);
+    const north = plans.find((row) => row.brand === "Демо Север");
+    expect(north).toMatchObject({ month: "2026-11", contractor: "Tandem", line: "nc", leads: 300, cpl: 4500, spend: null });
+    expect(plans.find((row) => row.brand === "TANK")).toMatchObject({ contractor: "Tandem", line: "nc", leads: 80 });
+    expect(plans.find((row) => row.brand === "Демо Юг")).toMatchObject({ contractor: "RTA", line: "afs", leads: 40, cpl: 2700 });
+    expect(plans.some((row) => row.leads === 999 || row.cpl === 9999)).toBe(false);
   });
 
   it("из сводки берёт только план РЛ и CPL, без факта и расхода", () => {

@@ -1,4 +1,5 @@
 import { COMBINED_BRAND, canonicalBrand, exeedEsteoKind, sameBrand } from "./brand-alias";
+import { ACCOUNTS } from "./catalog";
 import type { Line } from "./types";
 import { parseNumberCell } from "./tabular";
 
@@ -296,7 +297,8 @@ function atCell(row: string[], index: number): string {
 }
 
 export function matrixToPlans(matrix: string[][], opts?: { onlyRlCpl?: boolean }): PlanRow[] {
-  const rows = isWidePlanSheet(matrix) ? parseWidePlans(matrix) : parseLongPlans(matrix);
+  const summary = parseSummaryPlans(matrix);
+  const rows = summary ?? (isWidePlanSheet(matrix) ? parseWidePlans(matrix) : parseLongPlans(matrix));
   const cleaned = opts?.onlyRlCpl ? rows.map((row) => ({ ...row, spend: null, visits: null })) : rows;
   return foldPlanRows(cleaned);
 }
@@ -390,6 +392,98 @@ export function foldPlanRows(rows: PlanRow[]): PlanRow[] {
     }
   }
   return [...rest, ...folded.filter((row) => !drop.has(row)), ...extra];
+}
+
+/**
+ * Сводка «Сводный отчет контекст»: одна вкладка = один месяц.
+ * SALES — линия NC, AFTERSALES — AFS. План РЛ — штуки, «План CPL ОП» — рубли.
+ */
+function parseSummaryPlans(matrix: string[][]): PlanRow[] | null {
+  const header = findSummaryHeader(matrix);
+  if (!header) return null;
+  const month = monthFromSummary(matrix);
+  if (!month) return null;
+  let line: Line = "nc";
+  const map = new Map<string, PlanRow>();
+  for (const row of matrix.slice(header.at + 1)) {
+    const label = row.map((item) => normHeader(item)).join(" ");
+    if (/\baftersales\b|афтерсейл|after sales/.test(label)) {
+      line = "afs";
+      continue;
+    }
+    if (/^sales$/.test(normHeader(atCell(row, header.source))) || label.trim() === "sales") {
+      line = "nc";
+      continue;
+    }
+    if (normHeader(atCell(row, header.brand)) === "марка") continue;
+    const brand = canonBrand(atCell(row, header.brand));
+    if (!brand || brand === "Итого" || /^\d{2}\.\d{2}\.20\d{2}$/.test(brand)) continue;
+    if (/данн|проверен|не заверш/.test(normHeader(brand))) continue;
+    const leads = parseNumberCell(atCell(row, header.rl));
+    const cpl = parseNumberCell(atCell(row, header.cpl));
+    if (leads == null && cpl == null) continue;
+    const contractor = canonContractor(atCell(row, header.contractor));
+    const key = `${month}|${contractor}|${brand}|${line}`;
+    const plan = map.get(key) || blankPlan(month, contractor, brand, line);
+    if (leads != null) plan.leads = leads;
+    if (cpl != null) plan.cpl = cpl;
+    map.set(key, plan);
+  }
+  return Array.from(map.values());
+}
+
+function findSummaryHeader(matrix: string[][]): {
+  at: number;
+  brand: number;
+  contractor: number;
+  source: number;
+  rl: number;
+  cpl: number;
+} | null {
+  for (let at = 0; at < Math.min(matrix.length, 40); at += 1) {
+    const row = matrix[at];
+    if (row.some((item) => monthFromHeader(item))) continue;
+    const rl = row.findIndex((item) => normHeader(item).startsWith("план") && classifyPlanMetric(item) === "rl");
+    const cpl = row.findIndex((item) => normHeader(item).startsWith("план") && classifyPlanMetric(item) === "cpl");
+    const brand = row.findIndex((item) => ["марка", "бренд", "brand"].includes(normHeader(item)));
+    const contractor = row.findIndex((item) => ["агентство", "подрядчик", "contractor"].includes(normHeader(item)));
+    const source = row.findIndex((item) => normHeader(item).includes("источник"));
+    if (rl >= 0 && cpl >= 0 && brand >= 0 && contractor >= 0) return { at, brand, contractor, source, rl, cpl };
+  }
+  return null;
+}
+
+function monthFromSummary(matrix: string[][]): string {
+  for (const row of matrix) {
+    for (const item of row) {
+      const exact = item.trim().match(/^(\d{2})\.(\d{2})\.(20\d{2})$/);
+      if (exact) return `${exact[3]}-${exact[2]}`;
+    }
+  }
+  for (const row of matrix) {
+    for (const item of row) {
+      const found = item.match(/(\d{2})\.(\d{2})\.(20\d{2})/);
+      if (found) return `${found[3]}-${found[2]}`;
+    }
+  }
+  return "";
+}
+
+function canonContractor(raw: string): string {
+  const text = raw.trim().toLowerCase();
+  if (text === "тандем" || text === "tandem") return "Tandem";
+  if (text === "rta") return "RTA";
+  return raw.trim();
+}
+
+function canonBrand(raw: string): string {
+  const text = raw.trim().replace(/\s+/g, " ");
+  const key = text.toLowerCase();
+  if (key === "танк" || key === "tank") return "TANK";
+  if (key === "haval pro") return "HAVAL PRO";
+  if (key === "volt spb") return "Volt SPB";
+  const found = ACCOUNTS.find((item) => item.brand.toLowerCase() === key);
+  return found ? found.brand : text;
 }
 
 function parseLongPlans(matrix: string[][]): PlanRow[] {

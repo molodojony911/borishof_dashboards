@@ -22,6 +22,20 @@ describe("Exeed и Esteo — один проект", () => {
     expect(parseFilters((key) => (key === "brand" ? "Эстео" : "")).brand).toBe("Exeed + Esteo");
   });
 
+  it("в сводном листе складывает РЛ Exeed и Esteo и взвешивает CPL", () => {
+    const plans = matrixToPlans(
+      parseCsv(
+        "Марка,Агентство,SALES Источник,План РЛ,План CPL ОП\nEXEED,RTA,Яндекс Директ,100,\"4000,00 ₽\"\nЭстео,RTA,Яндекс Директ,50,\"2000,00 ₽\"\n,,AFTERSALES\nМарка,Агентство,Источник,План РЛ,План CPL ОП\nEXEED,RTA,Яндекс Директ,10,\"1000,00 ₽\"\n01.11.2026\n"
+      ),
+      { onlyRlCpl: true }
+    );
+    const nc = plans.find((row) => row.brand === "Exeed + Esteo" && row.line === "nc");
+    const afs = plans.find((row) => row.brand === "Exeed + Esteo" && row.line === "afs");
+    expect(nc).toMatchObject({ month: "2026-11", contractor: "RTA", leads: 150, spend: null });
+    expect(nc?.cpl).toBeCloseTo((4000 * 100 + 2000 * 50) / 150);
+    expect(afs).toMatchObject({ contractor: "RTA", leads: 10, cpl: 1000, spend: null });
+  });
+
   it("суммирует планы РЛ и усредняет CPL по плану лидов", () => {
     const plans = matrixToPlans(
       parseCsv("month,contractor,brand,line,leads,cpl\n2026-11,RTA,EXEED,nc,100,4000\n2026-11,RTA,Esteo,nc,50,2000\n2026-11,RTA,Эксид,afs,10,1000\n")
