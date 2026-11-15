@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { canonicalBrand } from "@/lib/brand-alias";
 import { ACCOUNTS, CONTRACTORS, LINE_LABEL } from "@/lib/catalog";
 import { buildQuery } from "@/lib/href";
 
 function brandFits(brand: string, contractor: string, line: string): boolean {
   if (!brand) return true;
   return ACCOUNTS.some(
-    (acc) => acc.brand === brand && (!contractor || acc.contractor === contractor) && (!line || acc.line === line)
+    (acc) => acc.brand === canonicalBrand(brand) && (!contractor || acc.contractor === contractor) && (!line || acc.line === line)
   );
 }
 
@@ -19,7 +20,7 @@ export function FilterBar() {
   const router = useRouter();
   const contractor = search.get("contractor") || "";
   const line = search.get("line") || "";
-  const brand = search.get("brand") || "";
+  const brand = canonicalBrand(search.get("brand") || "");
   const q = search.toString();
   const brands = useMemo(() => {
     const names = new Set(
