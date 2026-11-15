@@ -1,0 +1,64 @@
+{
+  "savedAt": 1760000000000,
+  "payload": {
+    "mode": "live",
+    "generatedAt": "2026-10-01T08:00:00.000Z",
+    "range": {
+      "from": "2026-09-24",
+      "to": "2026-09-30",
+      "previousFrom": "2026-09-17",
+      "previousTo": "2026-09-23",
+      "key": "7d"
+    },
+    "kpis": [],
+    "series": [
+      { "date": "2026-09-24", "spend": 120000, "clicks": 400, "totalLeads": 8, "qualityLeads": 4, "visits": 900, "calls": 6 }
+    ],
+    "campaigns": [],
+    "contractors": [],
+    "brands": [],
+    "lines": [],
+    "filter": { "contractor": "", "line": "", "brand": "" },
+    "leads": {
+      "total": 0,
+      "previousTotal": 0,
+      "unique": 0,
+      "quality": 0,
+      "previousQuality": 0,
+      "shortQuality": 0,
+      "previousShortQuality": 0,
+      "forms": 0,
+      "previousForms": 0,
+      "coveredBrands": [],
+      "partial": false,
+      "byTag": [],
+      "bySource": [],
+      "sample": []
+    },
+    "behavior": {
+      "visits": 0,
+      "users": 0,
+      "bounceRate": 0,
+      "avgDurationSec": 0,
+      "pageDepth": 0,
+      "previousVisits": 0,
+      "previousBounceRate": 0,
+      "previousDurationSec": 0,
+      "previousPageDepth": 0,
+      "goalLeads": 0,
+      "previousGoalLeads": 0,
+      "directClicks": 0,
+      "metrikaDirectVisits": 0,
+      "funnel": [],
+      "pages": [],
+      "paths": [],
+      "sources": [],
+      "devices": [],
+      "byCampaign": []
+    },
+    "alerts": [],
+    "insights": [],
+    "health": [],
+    "qualityTags": []
+  }
+}

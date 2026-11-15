@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+*.tsbuildinfo
+*.log
+
+.env
+.env.*
+!.env.example
+
+# Токены, кэш, выгрузки звонков и загруженные планы. Образцы в data/samples остаются в git.
+data/*
+!data/.gitkeep
+!data/samples/

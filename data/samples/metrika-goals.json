@@ -1,0 +1,26 @@
+[
+  {
+    "counterId": "96291650",
+    "http": 200,
+    "error": null,
+    "op": [{ "id": "322778995", "name": "Уникальный звонок", "type": "action" }],
+    "os": [],
+    "calls": [{ "id": "322778995", "name": "Уникальный звонок", "type": "action" }]
+  },
+  {
+    "counterId": "94930260",
+    "http": 200,
+    "error": null,
+    "op": [{ "id": "308966440", "name": "Уникальный звонок", "type": "action" }],
+    "os": [],
+    "calls": [{ "id": "308966440", "name": "Уникальный звонок", "type": "action" }]
+  },
+  {
+    "counterId": "105085067",
+    "http": 200,
+    "error": null,
+    "op": [],
+    "os": [],
+    "calls": []
+  }
+]
