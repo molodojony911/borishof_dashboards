@@ -43,6 +43,14 @@ export interface AdRow {
   adId: string;
   campaign: string;
   campaignId: string;
+  /** Нет в старых кэшах: тогда объявление сравнивается с кампанией, не с группой. */
+  adGroupId?: string;
+  adGroupName?: string;
+  brand?: string;
+  line?: string;
+  contractor?: string;
+  /** Качественные лиды Calltouch кампании, разложенные по объявлениям. */
+  qualityLeads?: number;
   impressions: number;
   clicks: number;
   cost: number;
@@ -330,12 +338,17 @@ export async function fetchAudienceSlices(
 interface DirectAd {
   Id: number;
   CampaignId: number;
+  AdGroupId?: number;
   TextAd?: {
     Title?: string;
     Title2?: string;
     Text?: string;
     SitelinkSetId?: number;
     AdExtensions?: Array<{ AdExtensionId: number; Type: string }>;
+  };
+  ResponsiveAd?: {
+    Titles?: string[];
+    Texts?: string[];
   };
 }
 
@@ -355,8 +368,9 @@ async function fetchAdTexts(acc: DirectAccount, campaignIds: string[]): Promise<
         method: "get",
         params: {
           SelectionCriteria: { CampaignIds: chunk, States: ["ON", "SUSPENDED"] },
-          FieldNames: ["Id", "CampaignId"],
+          FieldNames: ["Id", "CampaignId", "AdGroupId"],
           TextAdFieldNames: ["Title", "Title2", "Text", "SitelinkSetId", "AdExtensions"],
+          ResponsiveAdFieldNames: ["Titles", "Texts"],
           Page: { Limit: 1000, Offset: offset }
         }
       });
@@ -380,7 +394,7 @@ export async function fetchAds(
         acc,
         range,
         "AD_PERFORMANCE_REPORT",
-        ["AdId", "CampaignId", "CampaignName", "Impressions", "Clicks", "Cost"],
+        ["AdId", "AdGroupId", "AdGroupName", "CampaignId", "CampaignName", "Impressions", "Clicks", "Cost"],
         "bh-ads"
       );
       const campaignIds = Array.from(new Set(raw.map((r) => String(r.CampaignId || "")).filter(Boolean)));
@@ -394,18 +408,26 @@ export async function fetchAds(
         const impressions = parseNum(r.Impressions);
         const clicks = parseNum(r.Clicks);
         const ad = texts.get(String(r.AdId || ""));
+        const responsiveTitle = ad?.ResponsiveAd?.Titles?.find((item) => item.trim()) || "";
+        const responsiveText = ad?.ResponsiveAd?.Texts?.find((item) => item.trim()) || "";
         return {
           adId: String(r.AdId || ""),
           campaign: r.CampaignName || "",
           campaignId: String(r.CampaignId || ""),
+          adGroupId: String(r.AdGroupId || ad?.AdGroupId || ""),
+          adGroupName: r.AdGroupName || "",
+          brand: acc.brand,
+          line: acc.line,
+          contractor: acc.contractor,
+          qualityLeads: 0,
           impressions,
           clicks,
           cost: parseNum(r.Cost),
           conversions: uniqueCallConversions(r, acc.goalCallId),
           ctr: impressions ? (clicks / impressions) * 100 : 0,
-          title: ad?.TextAd?.Title || "",
+          title: ad?.TextAd?.Title || responsiveTitle,
           title2: ad?.TextAd?.Title2 || "",
-          text: ad?.TextAd?.Text || "",
+          text: ad?.TextAd?.Text || responsiveText,
           sitelinks: ad?.TextAd?.SitelinkSetId ? 1 : 0,
           callouts: (ad?.TextAd?.AdExtensions || []).filter((x) => x.Type === "CALLOUT").length
         };

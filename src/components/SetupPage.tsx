@@ -124,6 +124,11 @@ export function SetupPage() {
             Приложение на oauth.yandex.ru с доступом «Яндекс.Директ». Токен выпускает представитель, у которого есть доступ к
             кабинетам подрядчика. После правки .env перезапустите npm run dev.
           </p>
+          <p className="mt-2 text-mute">
+            Варианты текстов слабых объявлений: <span className="text-paper">OPENAI_API_KEY</span> в окружении сервера. Прокси —{" "}
+            <span className="text-paper">OPENAI_BASE_URL</span>, модель — <span className="text-paper">OPENAI_MODEL</span> (по
+            умолчанию gpt-4o-mini). Без ключа разбор остаётся, кнопка скрыта. В Директ тексты не отправляются.
+          </p>
         </li>
         <li>
           <h2 className="font-display text-xl">3. Calltouch</h2>

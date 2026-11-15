@@ -3,7 +3,10 @@ import { dataPath } from "./paths";
 
 import { sameBrand } from "./brand-alias";
 import { emptyFilter } from "./catalog";
-import { loadSettings, resolveDirectToken } from "./config";
+import { loadSettings, resolveCalltouchToken, resolveDirectToken } from "./config";
+import { openAiConfigured } from "./ad-copy";
+import { allocateQualityLeads, analyzeAdPerformance } from "./engines/ad-effectiveness";
+import { fetchCalltouchLeads } from "./connectors/calltouch";
 import {
   fetchAds,
   fetchAudienceSlices,
@@ -35,6 +38,8 @@ export interface DirectDeepPayload {
   audience: AudiencePack;
   insights: InsightItem[];
   errors: string[];
+  /** Генерация текстов включена, только если на сервере задан OPENAI_API_KEY. */
+  adCopyEnabled: boolean;
 }
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -45,7 +50,7 @@ function cacheDir(): string {
 
 function cacheFile(range: DateRange, filter: DashboardFilter): string {
   const key = [range.key, filter.contractor || "all", filter.line || "all", filter.brand || "all"].join("_");
-  return dataPath("cache", `direct-deep-v2-${key}.json`);
+  return dataPath("cache", `direct-deep-v3-${key}.json`);
 }
 
 function readCache(range: DateRange, filter: DashboardFilter): DirectDeepPayload | null {
@@ -93,9 +98,12 @@ export async function buildDirectDeep(
 
   if (cached) {
     // Выгрузки тяжёлые, поэтому кэшируем их надолго, а выводы пересобираем каждый раз.
+    const ads = cached.ads.review ? cached.ads : { ...cached.ads, review: analyzeAdPerformance(cached.ads.rows) };
     return {
       ...cached,
-      insights: buildDeepInsights(cached.queries, cached.ads, cached.placements, cached.audience)
+      ads,
+      adCopyEnabled: openAiConfigured(),
+      insights: buildDeepInsights(cached.queries, ads, cached.placements, cached.audience)
     };
   }
 
@@ -113,7 +121,8 @@ export async function buildDirectDeep(
       placements: buildPlacementsSection([]),
       audience: EMPTY_AUDIENCE,
       insights: [],
-      errors: blocked.length ? blocked : ["Нет кабинетов Директа с токеном под текущий фильтр"]
+      errors: blocked.length ? blocked : ["Нет кабинетов Директа с токеном под текущий фильтр"],
+      adCopyEnabled: openAiConfigured()
     };
   }
 
@@ -128,15 +137,28 @@ export async function buildDirectDeep(
     )
   );
 
-  const [queries, ads, placements, audience] = await Promise.all([
+  const calltouchAccounts = settings.calltouch.filter((acc) => {
+    if (!acc.siteId || !resolveCalltouchToken(acc)) return false;
+    if (filter.brand && !sameBrand(acc.brand || "", filter.brand)) return false;
+    if (filter.contractor && acc.contractor && acc.contractor !== filter.contractor) return false;
+    return true;
+  });
+  const [queries, ads, placements, audience, calltouch] = await Promise.all([
     fetchSearchQueries(accounts, range),
     fetchAds(accounts, range),
     fetchPlacements(accounts, range),
-    fetchAudienceSlices(accounts, range)
+    fetchAudienceSlices(accounts, range),
+    calltouchAccounts.length
+      ? fetchCalltouchLeads(calltouchAccounts, range).catch((e) => ({
+          current: [],
+          previous: [],
+          errors: [e instanceof Error ? e.message : "Calltouch для объявлений не ответил"]
+        }))
+      : Promise.resolve({ current: [], previous: [], errors: [] as string[] })
   ]);
 
   const queriesSection = buildQueriesSection(queries.rows, brandWords);
-  const adsSection = buildAdsSection(ads.rows);
+  const adsSection = buildAdsSection(allocateQualityLeads(ads.rows, calltouch.current));
   const placementsSection = buildPlacementsSection(placements.rows);
 
   const payload: DirectDeepPayload = {
@@ -149,8 +171,9 @@ export async function buildDirectDeep(
     audience: audience.pack,
     insights: buildDeepInsights(queriesSection, adsSection, placementsSection, audience.pack),
     errors: Array.from(
-      new Set([...blocked, ...queries.errors, ...ads.errors, ...placements.errors, ...audience.errors])
-    ).slice(0, 8)
+      new Set([...blocked, ...queries.errors, ...ads.errors, ...placements.errors, ...audience.errors, ...calltouch.errors])
+    ).slice(0, 8),
+    adCopyEnabled: openAiConfigured()
   };
 
   writeCache(range, filter, payload);
