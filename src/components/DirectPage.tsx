@@ -5,6 +5,7 @@ import { useDirectDeep } from "./useDirectDeep";
 import { PageIntro, RoleLabel, SeverityDot, StateScreen } from "./ui";
 import { money, num, pct, safeDiv } from "@/lib/format";
 import type { SliceRow } from "@/lib/connectors/direct-deep";
+import type { AdReview, AdScore } from "@/lib/engines/ad-effectiveness";
 
 const TABS = [
   { id: "queries", label: "Запросы" },
@@ -180,7 +181,8 @@ function QueryTable({
 
 function Ads({ data }: { data: NonNullable<ReturnType<typeof useDirectDeep>["data"]> }) {
   const a = data.ads;
-  if (!a.rows.length) {
+  const hasReview = Boolean(a.review && (a.review.ads.length || a.review.groups.length));
+  if (!a.rows.length && !hasReview) {
     return (
       <Empty text="Текстов объявлений нет: в срезе только Мастер кампаний и автоматические форматы, где текст генерирует Директ. Разбор текстов появится, как только в кабинете будут обычные текстово-графические объявления." />
     );
@@ -196,6 +198,149 @@ function Ads({ data }: { data: NonNullable<ReturnType<typeof useDirectDeep>["dat
 
       <AdTable title="Работают хуже своих же" rows={a.burning} />
       <AdTable title="Лидеры по CTR — образец для переписывания" rows={a.leaders} />
+      {a.review ? <Effectiveness review={a.review} enabled={Boolean(data.adCopyEnabled)} /> : null}
+    </div>
+  );
+}
+
+function Effectiveness({ review, enabled }: { review: AdReview; enabled: boolean }) {
+  const weak = review.weak.slice(0, 15);
+  const groups = review.groups.filter((row) => row.verdict === "weak").slice(0, 8);
+  return (
+    <div className="space-y-8">
+      <p className="text-xs text-mute">
+        {enabled
+          ? "Варианты текстов собираются на сервере и в кабинет Директа не отправляются."
+          : "Варианты текстов скрыты: на сервере не задан OPENAI_API_KEY. Разбор CTR, CPC и CPL от этого не зависит. Для прокси добавьте OPENAI_BASE_URL, модель — OPENAI_MODEL (по умолчанию gpt-4o-mini)."}
+      </p>
+      {!weak.length && !groups.length ? (
+        <Empty text="Слабых объявлений и групп нет: либо мало показов, либо отрыв от медианы меньше порога." />
+      ) : null}
+      {groups.length ? (
+        <section>
+          <h2 className="mb-4 font-display text-xl">Слабые группы</h2>
+          <div className="space-y-px bg-white/[0.06]">
+            {groups.map((row) => (
+              <div key={`${row.campaign}-${row.groupId || row.groupName}`} className="bg-ink-950 p-4 text-sm">
+                <div className="flex flex-wrap justify-between gap-2">
+                  <div>{row.groupName}</div>
+                  <div className="text-xs text-mute">
+                    CTR {row.ctr.toFixed(2)}% · CPC {row.clicks ? money(row.cpc) : "—"} · {money(row.cost)}
+                    {row.cpl != null ? ` · CPL ${money(row.cpl)}` : ""} · конверсии {num(row.conversions)}
+                  </div>
+                </div>
+                <p className="mt-1 text-xs text-mute">{row.campaign}</p>
+                {row.reasons.map((reason) => (
+                  <p key={reason} className="mt-1 text-xs text-rose-200">
+                    {reason}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {weak.length ? (
+        <section>
+          <h2 className="mb-2 font-display text-xl">Слабые объявления</h2>
+          <p className="mb-4 text-xs text-mute">
+            Сравнение с медианой группы, если в ней хотя бы три объявления, иначе с кампанией.
+          </p>
+          <div className="space-y-px bg-white/[0.06]">
+            {weak.map((row) => (
+              <Suggest key={row.adId} ad={row} leaders={review.strong} enabled={enabled} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function Suggest({ ad, leaders, enabled }: { ad: AdScore; leaders: AdScore[]; enabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [variants, setVariants] = useState<Array<{ title: string; title2: string; text: string; why: string }>>([]);
+
+  async function run() {
+    setOpen(true);
+    setLoading(true);
+    setError("");
+    const peers = leaders.filter((item) => item.adId !== ad.adId && (ad.groupId ? item.groupId === ad.groupId : item.campaignId === ad.campaignId));
+    const res = await fetch("/api/direct/ad-copy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        brand: ad.brand,
+        line: ad.line,
+        title: ad.title,
+        title2: ad.title2,
+        text: ad.text,
+        reasons: ad.reasons,
+        leaders: peers.slice(0, 3)
+      })
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      variants?: Array<{ title: string; title2: string; text: string; why: string }>;
+    };
+    setVariants(json.variants || []);
+    setError(json.error || (!res.ok ? "Не удалось собрать варианты." : ""));
+    setLoading(false);
+  }
+
+  return (
+    <div className="bg-ink-950 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <div className="font-display text-base">
+          {ad.title || "Без заголовка"}
+          {ad.title2 ? <span className="text-mute"> — {ad.title2}</span> : null}
+        </div>
+        <div className="text-xs text-mute">
+          CTR {ad.ctr.toFixed(2)}% · CPC {ad.clicks ? money(ad.cpc) : "—"} · {ad.cpl != null ? `CPL ${money(ad.cpl)}` : "CPL —"} ·{" "}
+          {money(ad.cost)}
+        </div>
+      </div>
+      {ad.text ? <p className="mt-1 max-w-3xl text-sm text-paper/80">{ad.text}</p> : null}
+      <div className="mt-2 text-[11px] text-mute">
+        {ad.campaign}
+        {ad.groupName ? ` · ${ad.groupName}` : ""} · показы {num(ad.impressions)} · клики {num(ad.clicks)} · конверсии {num(ad.conversions)} ·
+        качественные лиды {num(ad.qualityLeads)}
+      </div>
+      {ad.reasons.map((reason) => (
+        <p key={reason} className="mt-1 text-xs text-rose-200">
+          {reason}
+        </p>
+      ))}
+      {enabled ? (
+        <button type="button" onClick={run} className="mt-3 border border-white/15 px-3 py-1.5 text-xs text-paper">
+          Предложить варианты
+        </button>
+      ) : null}
+      {open ? (
+        <div className="mt-3 space-y-2">
+          {loading ? <p className="text-xs text-mute">Собираем варианты…</p> : null}
+          {error ? <p className="text-xs text-amber-200">{error}</p> : null}
+          {variants.map((item) => (
+            <div key={`${item.title}-${item.text}`} className="border border-white/[0.08] p-3 text-sm">
+              <div>
+                {item.title} <span className="text-mute">({item.title.length})</span>
+                {item.title2 ? (
+                  <span className="text-mute">
+                    {" "}
+                    — {item.title2} ({item.title2.length})
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 text-paper/80">
+                {item.text} <span className="text-mute">({item.text.length})</span>
+              </p>
+              {item.why ? <p className="mt-1 text-xs text-mute">{item.why}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

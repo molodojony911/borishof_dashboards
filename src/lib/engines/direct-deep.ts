@@ -2,6 +2,7 @@ import { money, num, pct, safeDiv } from "../format";
 import { ruleRef } from "../knowledge/rules";
 import type { AdRow, AudiencePack, PlacementRow, QueryRow, SliceRow } from "../connectors/direct-deep";
 import type { InsightItem } from "../types";
+import { analyzeAdPerformance, type AdReview } from "./ad-effectiveness";
 
 export interface JunkQuery extends QueryRow {
   reason: string;
@@ -35,6 +36,7 @@ export interface AdsSection {
   noExtensions: { count: number; cost: number };
   burning: AdRow[];
   leaders: AdRow[];
+  review: AdReview;
 }
 
 export interface PlacementsSection {
@@ -203,7 +205,8 @@ export function buildAdsSection(rows: AdRow[]): AdsSection {
       .filter((r) => avgCtr > 0 && r.ctr < avgCtr * 0.6)
       .sort((a, b) => b.cost - a.cost)
       .slice(0, 12),
-    leaders: withVolume.sort((a, b) => b.ctr - a.ctr).slice(0, 12)
+    leaders: withVolume.sort((a, b) => b.ctr - a.ctr).slice(0, 12),
+    review: analyzeAdPerformance(rows)
   };
 }
 

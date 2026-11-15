@@ -91,6 +91,8 @@ describe("дашборд без токенов", () => {
     expect(deep.insights).toEqual([]);
     expect(deep.errors.length).toBeGreaterThan(0);
     expect(deep.errors.join(" ")).not.toMatch(/Демо/);
+    expect(deep.adCopyEnabled).toBe(false);
+    expect(deep.ads.review.weak).toEqual([]);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 });
