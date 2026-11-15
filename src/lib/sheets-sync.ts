@@ -190,7 +190,7 @@ async function fetchValues(id: string, tab: string, accessToken: string): Promis
 }
 
 function csvLooksClosed(status: number, text: string): boolean {
-  return status === 401 || text.includes("accounts.google.com") || text.includes("Sign in");
+  return status === 401 || status === 403 || text.includes("accounts.google.com") || text.includes("Sign in");
 }
 
 function csvLooksUsable(status: number, text: string): boolean {
@@ -212,7 +212,7 @@ async function fetchPublicCsv(id: string, tab: string, gid: string): Promise<str
     const text = await res.text();
     if (csvLooksUsable(res.status, text)) return text;
     if (csvLooksClosed(res.status, text)) {
-      errors.push("лист закрыт для этого адреса (HTTP 401)");
+      errors.push(`лист закрыт для этого адреса (HTTP ${res.status || 401})`);
       continue;
     }
     errors.push(`CSV ${res.status}`);

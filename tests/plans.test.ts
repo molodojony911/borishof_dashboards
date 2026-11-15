@@ -9,6 +9,8 @@ import { DEFAULT_THRESHOLDS } from "../src/lib/defaults";
 describe("планы и классифайды", () => {
   it("понимает деньги с неразрывным пробелом и процент", () => {
     expect(parseNumberCell("144\u00a0000₽")).toBe(144000);
+    expect(parseNumberCell("500 000,00 ₽")).toBe(500000);
+    expect(parseNumberCell("36,4%")).toBe(36.4);
     expect(parseNumberCell("40,00%")).toBe(40);
     expect(parseNumberCell("—")).toBeNull();
   });
