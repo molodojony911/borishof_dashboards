@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { dataPath } from "./paths";
-import type { ClassifiedSheet, PlanRow } from "./plan-model";
+import { foldClassifiedSheet, foldPlanRows, type ClassifiedSheet, type PlanRow } from "./plan-model";
 
 export interface StoredPlans {
   updatedAt: string;
@@ -34,19 +34,19 @@ export function loadPlans(): StoredPlans {
   return {
     updatedAt: stored.updatedAt || "",
     source: stored.source === "upload" || stored.source === "sheet" ? stored.source : "",
-    rows: Array.isArray(stored.rows) ? stored.rows : []
+    rows: foldPlanRows(Array.isArray(stored.rows) ? stored.rows : [])
   };
 }
 
 export function savePlans(rows: PlanRow[], source: "upload" | "sheet"): StoredPlans {
-  const stored: StoredPlans = { updatedAt: new Date().toISOString(), source, rows };
+  const stored: StoredPlans = { updatedAt: new Date().toISOString(), source, rows: foldPlanRows(rows) };
   writeJson(dataPath("plans.json"), stored);
   return stored;
 }
 
 export function loadClassifieds(): StoredClassifieds {
   const stored = readJson<Partial<StoredClassifieds>>(dataPath("classifieds.json"), {});
-  return {
+  const base: StoredClassifieds = {
     updatedAt: stored.updatedAt || "",
     source: stored.source === "upload" || stored.source === "sheet" ? stored.source : "",
     month: stored.month || "",
@@ -55,17 +55,19 @@ export function loadClassifieds(): StoredClassifieds {
     wallets: Array.isArray(stored.wallets) ? stored.wallets : [],
     rows: Array.isArray(stored.rows) ? stored.rows : []
   };
+  return { ...base, ...foldClassifiedSheet(base) };
 }
 
 export function saveClassifieds(sheet: ClassifiedSheet, source: "upload" | "sheet"): StoredClassifieds {
+  const folded = foldClassifiedSheet(sheet);
   const stored: StoredClassifieds = {
     updatedAt: new Date().toISOString(),
     source,
-    month: sheet.month,
-    projects: sheet.projects,
-    platformForecast: sheet.platformForecast,
-    wallets: sheet.wallets,
-    rows: sheet.rows
+    month: folded.month,
+    projects: folded.projects,
+    platformForecast: folded.platformForecast,
+    wallets: folded.wallets,
+    rows: folded.rows
   };
   writeJson(dataPath("classifieds.json"), stored);
   return stored;

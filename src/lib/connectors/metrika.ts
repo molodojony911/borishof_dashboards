@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { eachDate } from "../period";
@@ -5,7 +6,8 @@ import { resolveMetrikaToken } from "../config";
 import { mapChunk } from "../async";
 import { HTTP_TIMEOUT, apiTimeout } from "../http";
 import { dataPath } from "../paths";
-import { ACCOUNTS } from "../catalog";
+import { sameBrand } from "../brand-alias";
+import { ACCOUNTS, LINE_LABEL } from "../catalog";
 import type { BehaviorSnapshot, CampaignBehaviorRow, DateRange, Line, MetrikaAccount, ProjectVisit } from "../types";
 
 const API = "https://api-metrika.yandex.net/stat/v1/data";
@@ -17,8 +19,10 @@ function cacheDir(): string {
 function quotaFile(): string {
   return dataPath("cache", "metrika", "quota-block.json");
 }
-/** Период кончается вчера — свежие цифры почти не меняются, кэш бережёт суточную квоту uid. */
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+/** Закрытые дни можно держать долго. Если в запрос попал сегодняшний день — кэш короткий. */
+const CACHE_TTL_CLOSED_MS = 12 * 60 * 60 * 1000;
+const CACHE_TTL_TODAY_MS = 45 * 60 * 1000;
+const METRIKA_PARALLEL = 3;
 
 interface MetrikaTable {
   totals?: number[] | number[][];
@@ -88,6 +92,16 @@ interface CounterSnap {
   devices: Array<{ device: "mobile" | "desktop" | "tablet"; visits: number; bounceRate: number; cr: number; calls: number }>;
   bytime: Array<{ date: string; visits: number }>;
   goalError: string;
+  /** Визиты по домену из одного запроса с ym:s:startURLDomain, чтобы не ходить отдельно на каждый сайт. */
+  domains?: Array<{
+    host: string;
+    visits: number;
+    previousVisits: number;
+    users: number;
+    bounceRate: number;
+    calls: number;
+    previousCalls: number;
+  }>;
 }
 
 let quotaExceeded = false;
@@ -128,7 +142,17 @@ function markQuotaExceeded(): void {
 }
 
 function cacheFile(acc: MetrikaAccount, range: DateRange): string {
-  return path.join(cacheDir(), `v1_${acc.counterId}_${range.from}_${range.to}_${range.previousFrom}_${range.previousTo}.json`);
+  return path.join(cacheDir(), `v2_${acc.counterId}_${range.from}_${range.to}_${range.previousFrom}_${range.previousTo}.json`);
+}
+
+export function moscowToday(now = new Date()): string {
+  const msk = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+  return msk.toISOString().slice(0, 10);
+}
+
+/** Прошлые дни — 12 часов. Диапазон, в который входит сегодня по Москве, — 45 минут. */
+export function metrikaCacheTtlMs(date2: string, now = new Date()): number {
+  return date2 >= moscowToday(now) ? CACHE_TTL_TODAY_MS : CACHE_TTL_CLOSED_MS;
 }
 
 function readCounterCache(acc: MetrikaAccount, range: DateRange, allowStale: boolean): CounterSnap | null {
@@ -136,7 +160,7 @@ function readCounterCache(acc: MetrikaAccount, range: DateRange, allowStale: boo
     const file = cacheFile(acc, range);
     if (!fs.existsSync(file)) return null;
     const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { savedAt: number; snap: CounterSnap };
-    if (!allowStale && Date.now() - raw.savedAt > CACHE_TTL_MS) return null;
+    if (!allowStale && Date.now() - raw.savedAt > metrikaCacheTtlMs(range.to)) return null;
     return raw.snap;
   } catch {
     return null;
@@ -153,6 +177,52 @@ function writeCounterCache(acc: MetrikaAccount, range: DateRange, snap: CounterS
   }
 }
 
+let inFlight = 0;
+const slots: Array<() => void> = [];
+
+async function withMetrikaSlot<T>(job: () => Promise<T>): Promise<T> {
+  if (inFlight >= METRIKA_PARALLEL) {
+    await new Promise<void>((resolve) => slots.push(resolve));
+  }
+  inFlight += 1;
+  try {
+    return await job();
+  } finally {
+    inFlight -= 1;
+    const next = slots.shift();
+    if (next) next();
+  }
+}
+
+function responseCacheFile(params: Record<string, string>): string {
+  const key = [params.ids, params.date1, params.date2, params.dimensions || "", params.metrics || "", params.filters || ""].join("|");
+  const hash = crypto.createHash("sha1").update(key).digest("hex").slice(0, 20);
+  return path.join(cacheDir(), `resp_${params.ids}_${hash}.json`);
+}
+
+function readResponseCache(params: Record<string, string>, allowStale: boolean): MetrikaTable | null {
+  try {
+    const file = responseCacheFile(params);
+    if (!fs.existsSync(file)) return null;
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { savedAt: number; table: MetrikaTable };
+    const ttl = metrikaCacheTtlMs(params.date2 || "");
+    if (!allowStale && Date.now() - Number(raw.savedAt || 0) > ttl) return null;
+    return raw.table || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeResponseCache(params: Record<string, string>, table: MetrikaTable): void {
+  try {
+    const dir = cacheDir();
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(responseCacheFile(params), JSON.stringify({ savedAt: Date.now(), table }), "utf8");
+  } catch {
+    /* кэш необязателен */
+  }
+}
+
 async function metrikaGet(token: string, params: Record<string, string>): Promise<MetrikaTable> {
   if (quotaExceeded || readQuotaBlock()) {
     quotaExceeded = true;
@@ -160,34 +230,65 @@ async function metrikaGet(token: string, params: Record<string, string>): Promis
   }
   const url = new URL(API);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  const res = await fetch(url, {
-    headers: { Authorization: `OAuth ${token}` },
-    cache: "no-store",
-    signal: apiTimeout(HTTP_TIMEOUT.metrikaMs)
-  });
+  const res = await withMetrikaSlot(() =>
+    fetch(url, {
+      headers: { Authorization: `OAuth ${token}` },
+      cache: "no-store",
+      signal: apiTimeout(HTTP_TIMEOUT.metrikaMs)
+    })
+  );
   if (!res.ok) {
     const text = await res.text();
-    if (res.status === 429 || /quota_requests_by_uid/i.test(text)) markQuotaExceeded();
     throw new Error(`Метрика ${res.status}: ${text.slice(0, 280)}`);
   }
   return (await res.json()) as MetrikaTable;
 }
 
-/** Повтор только на сеть/5xx. 429 ретраить нельзя: каждая попытка жрёт ту же суточную квоту. */
+/** 429 пробуем дважды с паузой. После этого квота считается исчерпанной и новые запросы не шлём. */
 async function metrikaGetRetry(token: string, params: Record<string, string>): Promise<MetrikaTable> {
   let last: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return await metrikaGet(token, params);
     } catch (e) {
       last = e;
       const msg = e instanceof Error ? e.message : "";
-      if (isQuotaError(msg)) throw e;
-      if (!/timeout|aborted|503|502|504/i.test(msg) || attempt === 1) throw e;
+      if (isQuotaError(msg)) {
+        if (attempt < 2) {
+          await sleep(1000 * (attempt + 1));
+          continue;
+        }
+        markQuotaExceeded();
+        throw e;
+      }
+      if (!/timeout|aborted|503|502|504/i.test(msg) || attempt === 2) throw e;
       await sleep(800);
     }
   }
   throw last instanceof Error ? last : new Error("Метрика: повторные ошибки");
+}
+
+async function cachedMetrikaGet(
+  token: string,
+  params: Record<string, string>
+): Promise<{ table: MetrikaTable; fromStale: boolean }> {
+  const fresh = readResponseCache(params, false);
+  if (fresh) return { table: fresh, fromStale: false };
+  if (quotaExceeded || readQuotaBlock()) {
+    quotaExceeded = true;
+    const stale = readResponseCache(params, true);
+    if (stale) return { table: stale, fromStale: true };
+    throw new Error("Метрика 429: квота uid исчерпана, запросы остановлены до сброса");
+  }
+  try {
+    const table = await metrikaGetRetry(token, params);
+    writeResponseCache(params, table);
+    return { table, fromStale: false };
+  } catch (e) {
+    const stale = readResponseCache(params, true);
+    if (stale) return { table: stale, fromStale: true };
+    throw e;
+  }
 }
 
 function total(table: MetrikaTable, index = 0): number {
@@ -264,11 +365,11 @@ async function fetchTable(
   withGoals: string
 ): Promise<MetrikaTable> {
   try {
-    return await metrikaGetRetry(acc.token, { ...params, metrics: params.metrics + withGoals });
+    return (await cachedMetrikaGet(acc.token, { ...params, metrics: params.metrics + withGoals })).table;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "";
     if (!withGoals || isQuotaError(msg)) throw e;
-    return metrikaGetRetry(acc.token, params);
+    return (await cachedMetrikaGet(acc.token, params)).table;
   }
 }
 
@@ -286,24 +387,116 @@ function emptyTable(): MetrikaTable {
 /**
  * Сводка и цели в одном запросе: было 4 вызова на период (текущий+прошлый × визиты+цели), стало 2.
  */
-async function fetchOverviewWithGoals(
-  acc: MetrikaAccount & { goalCallIds: string[] },
-  dates: { date1: string; date2: string },
-  includeUsers: boolean
-): Promise<{ table: MetrikaTable; goalError: string }> {
-  const core = includeUsers
-    ? "ym:s:visits,ym:s:users,ym:s:bounceRate,ym:s:avgVisitDurationSeconds,ym:s:pageDepth"
-    : "ym:s:visits,ym:s:bounceRate,ym:s:avgVisitDurationSeconds,ym:s:pageDepth";
-  const goals = acc.goalCallIds.map((id) => `ym:s:goal${id}reaches`).join(",");
-  const params = { ids: acc.counterId, ...dates, metrics: goals ? `${core},${goals}` : core };
-  try {
-    return { table: await metrikaGetRetry(acc.token, params), goalError: "" };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "ошибка целей";
-    if (isQuotaError(msg)) throw e;
-    const table = await metrikaGetRetry(acc.token, { ...params, metrics: core });
-    return { table, goalError: msg };
+export function normalizeMetrikaDate(raw: string): string {
+  const text = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+  return text.slice(0, 10);
+}
+
+export function normalizeHostName(raw: string): string {
+  return raw.trim().toLowerCase().replace(/^www\./, "");
+}
+
+export interface DomainDayRow {
+  date: string;
+  host: string;
+  visits: number;
+  users: number;
+  bounceRate: number;
+  durationSec: number;
+  pageDepth: number;
+  calls: number;
+}
+
+/** Ответ с dimensions=ym:s:date,ym:s:startURLDomain. Цели, если были в запросе, лежат с 6-й метрики. */
+export function rowsFromDomainDayTable(table: MetrikaMetricTable | null | undefined): DomainDayRow[] {
+  return (table?.data || [])
+    .map((row) => {
+      const dims = row.dimensions || [];
+      const metrics = row.metrics || [];
+      const date = normalizeMetrikaDate(dims[0]?.name || "");
+      const host = normalizeHostName(dims[1]?.name || "");
+      const visits = Number(metrics[0] || 0);
+      return {
+        date,
+        host,
+        visits,
+        users: Number(metrics[1] || 0),
+        bounceRate: Number(metrics[2] || 0),
+        durationSec: Number(metrics[3] || 0),
+        pageDepth: Number(metrics[4] || 0),
+        calls: metrics.slice(5).reduce((sum, value) => sum + Number(value || 0), 0)
+      };
+    })
+    .filter((row) => row.date);
+}
+
+export interface DomainBucket {
+  visits: number;
+  users: number;
+  bounceRate: number;
+  durationSec: number;
+  pageDepth: number;
+  calls: number;
+}
+
+function emptyBucket(): { visits: number; users: number; bounce: number; duration: number; depth: number; calls: number } {
+  return { visits: 0, users: 0, bounce: 0, duration: 0, depth: 0, calls: 0 };
+}
+
+function finishBucket(raw: { visits: number; users: number; bounce: number; duration: number; depth: number; calls: number }): DomainBucket {
+  const visits = raw.visits;
+  return {
+    visits,
+    users: raw.users,
+    bounceRate: visits ? raw.bounce / visits : 0,
+    durationSec: visits ? raw.duration / visits : 0,
+    pageDepth: visits ? raw.depth / visits : 0,
+    calls: raw.calls
+  };
+}
+
+function addDay(raw: ReturnType<typeof emptyBucket>, row: DomainDayRow): void {
+  raw.visits += row.visits;
+  raw.users += row.users;
+  raw.bounce += row.bounceRate * row.visits;
+  raw.duration += row.durationSec * row.visits;
+  raw.depth += row.pageDepth * row.visits;
+  raw.calls += row.calls;
+}
+
+export function aggregateDomainDays(rows: DomainDayRow[], range: DateRange): {
+  current: DomainBucket;
+  previous: DomainBucket;
+  byHost: Map<string, { current: DomainBucket; previous: DomainBucket }>;
+  daily: Array<{ date: string; visits: number }>;
+} {
+  const current = emptyBucket();
+  const previous = emptyBucket();
+  const hosts = new Map<string, { current: ReturnType<typeof emptyBucket>; previous: ReturnType<typeof emptyBucket> }>();
+  const daily = new Map<string, number>();
+  for (const row of rows) {
+    const now = row.date >= range.from && row.date <= range.to;
+    const prev = row.date >= range.previousFrom && row.date <= range.previousTo;
+    if (!now && !prev) continue;
+    if (now) {
+      addDay(current, row);
+      daily.set(row.date, (daily.get(row.date) || 0) + row.visits);
+    } else addDay(previous, row);
+    if (!row.host) continue;
+    const bag = hosts.get(row.host) || { current: emptyBucket(), previous: emptyBucket() };
+    addDay(now ? bag.current : bag.previous, row);
+    hosts.set(row.host, bag);
   }
+  return {
+    current: finishBucket(current),
+    previous: finishBucket(previous),
+    byHost: new Map(
+      Array.from(hosts.entries()).map(([host, bag]) => [host, { current: finishBucket(bag.current), previous: finishBucket(bag.previous) }])
+    ),
+    daily: Array.from(daily.entries()).map(([date, visits]) => ({ date, visits }))
+  };
 }
 
 async function fetchCounterLive(acc: MetrikaAccount & { goalCallIds: string[] }, range: DateRange): Promise<CounterSnap> {
@@ -314,10 +507,8 @@ async function fetchCounterLive(acc: MetrikaAccount & { goalCallIds: string[] },
   const deviceMetrics = "ym:s:visits,ym:s:bounceRate";
   const sourceMetrics = "ym:s:visits,ym:s:bounceRate,ym:s:avgVisitDurationSeconds";
 
-  const current = await fetchOverviewWithGoals(acc, { date1: range.from, date2: range.to }, true);
-  const previous = quotaExceeded
-    ? { table: emptyTable(), goalError: "" }
-    : await fetchOverviewWithGoals(acc, { date1: range.previousFrom, date2: range.previousTo }, false);
+  const span = await fetchDomainSpan(acc, range);
+  const domainDays = aggregateDomainDays(rowsFromDomainDayTable(span.table), range);
 
   const rest = async <T>(job: () => Promise<T>, fallback: T): Promise<T> => {
     if (quotaExceeded) return fallback;
@@ -342,34 +533,23 @@ async function fetchCounterLive(acc: MetrikaAccount & { goalCallIds: string[] },
       fetchTable(acc, { ...base, dimensions: "ym:s:lastSignTrafficSource", metrics: sourceMetrics, limit: "12" }, goals),
     emptyTable()
   );
-  const bytime = await rest(
-    () => metrikaGetRetry(acc.token, { ...base, dimensions: "ym:s:date", metrics: "ym:s:visits" }),
-    emptyTable()
-  );
   const utm = await rest(
     () => fetchTable(acc, { ...base, dimensions: "ym:s:lastUTMCampaign", metrics: sourceMetrics, limit: "60" }, goals),
     emptyTable()
   );
 
-  const overview = current.table;
-  const prevOverview = previous.table;
-  const goalOffsetNow = 5;
-  const goalOffsetPrev = 4;
-  const calls = acc.goalCallIds.reduce((sum, _, i) => sum + total(overview, goalOffsetNow + i), 0);
-  const previousCalls = acc.goalCallIds.reduce((sum, _, i) => sum + total(prevOverview, goalOffsetPrev + i), 0);
-
   return {
-    visits: total(overview, 0),
-    users: total(overview, 1),
-    bounceRate: total(overview, 2),
-    avgDurationSec: total(overview, 3),
-    pageDepth: total(overview, 4),
-    previousVisits: total(prevOverview, 0),
-    previousBounceRate: total(prevOverview, 1),
-    previousDurationSec: total(prevOverview, 2),
-    previousPageDepth: total(prevOverview, 3),
-    calls,
-    previousCalls,
+    visits: domainDays.current.visits,
+    users: domainDays.current.users,
+    bounceRate: domainDays.current.bounceRate,
+    avgDurationSec: domainDays.current.durationSec,
+    pageDepth: domainDays.current.pageDepth,
+    previousVisits: domainDays.previous.visits,
+    previousBounceRate: domainDays.previous.bounceRate,
+    previousDurationSec: domainDays.previous.durationSec,
+    previousPageDepth: domainDays.previous.pageDepth,
+    calls: domainDays.current.calls,
+    previousCalls: domainDays.previous.calls,
     pages: (pages.data || []).map((row) => {
       const pageVisits = row.metrics[0] || 0;
       const pageCalls = metricSum(row.metrics, 4, nGoals);
@@ -420,12 +600,44 @@ async function fetchCounterLive(acc: MetrikaAccount & { goalCallIds: string[] },
         calls: deviceCalls
       };
     }),
-    bytime: (bytime.data || []).map((row) => ({
-      date: row.dimensions[0]?.name || "",
-      visits: row.metrics[0] || 0
-    })),
-    goalError: current.goalError || previous.goalError
+    bytime: domainDays.daily,
+    goalError: span.goalError,
+    domains: Array.from(domainDays.byHost.entries()).map(([host, bag]) => ({
+      host,
+      visits: bag.current.visits,
+      previousVisits: bag.previous.visits,
+      users: bag.current.users,
+      bounceRate: bag.current.bounceRate,
+      calls: bag.current.calls,
+      previousCalls: bag.previous.calls
+    }))
   };
+}
+
+async function fetchDomainSpan(
+  acc: MetrikaAccount & { goalCallIds: string[] },
+  range: DateRange
+): Promise<{ table: MetrikaTable; goalError: string }> {
+  const core = "ym:s:visits,ym:s:users,ym:s:bounceRate,ym:s:avgVisitDurationSeconds,ym:s:pageDepth";
+  const goals = acc.goalCallIds.map((id) => `ym:s:goal${id}reaches`).join(",");
+  const params: Record<string, string> = {
+    ids: acc.counterId,
+    date1: range.previousFrom,
+    date2: range.to,
+    dimensions: "ym:s:date,ym:s:startURLDomain",
+    metrics: goals ? `${core},${goals}` : core,
+    limit: "10000"
+  };
+  const staleNote = "Метрика 429: квота uid, показан кэш";
+  try {
+    const got = await cachedMetrikaGet(acc.token, params);
+    return { table: got.table, goalError: got.fromStale ? staleNote : "" };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "ошибка целей";
+    if (!goals || isQuotaError(msg)) throw e;
+    const got = await cachedMetrikaGet(acc.token, { ...params, metrics: core });
+    return { table: got.table, goalError: got.fromStale ? staleNote : msg };
+  }
 }
 
 async function fetchCounterSnapshot(acc: MetrikaAccount & { goalCallIds: string[] }, range: DateRange): Promise<CounterSnap> {
@@ -434,7 +646,7 @@ async function fetchCounterSnapshot(acc: MetrikaAccount & { goalCallIds: string[
   if (quotaExceeded || readQuotaBlock()) {
     quotaExceeded = true;
     const stale = readCounterCache(acc, range, true);
-    if (stale) return { ...stale, goalError: stale.goalError || "квота Метрики, показан кэш" };
+    if (stale) return { ...stale, goalError: stale.goalError || "Метрика 429: квота uid, показан кэш" };
     throw new Error("Метрика 429: квота uid исчерпана, запросы остановлены до сброса");
   }
   try {
@@ -488,11 +700,16 @@ function mergeCampaignBehavior(
 
 export interface ProjectRef {
   projectId: string;
+  name: string;
   brand: string;
   line: Line;
   contractor: string;
   site: string;
   counterIds: string[];
+}
+
+function projectName(brand: string, line: Line): string {
+  return `${brand} · ${LINE_LABEL[line]}`;
 }
 
 export interface OverviewPair {
@@ -529,7 +746,7 @@ export function projectsFromAccounts(accounts: MetrikaAccount[]): ProjectRef[] {
     const matches = ACCOUNTS.filter(
       (item) =>
         item.counterIds.includes(acc.counterId) &&
-        (unscoped || !acc.brand || item.brand === acc.brand) &&
+        (unscoped || !acc.brand || sameBrand(item.brand, acc.brand)) &&
         (unscoped || !acc.line || item.line === acc.line) &&
         (!acc.contractor || item.contractor === acc.contractor)
     );
@@ -538,6 +755,7 @@ export function projectsFromAccounts(accounts: MetrikaAccount[]): ProjectRef[] {
         add(
           {
             projectId: item.id,
+            name: projectName(item.brand, item.line),
             brand: item.brand,
             line: item.line,
             contractor: item.contractor,
@@ -552,6 +770,7 @@ export function projectsFromAccounts(accounts: MetrikaAccount[]): ProjectRef[] {
     add(
       {
         projectId: acc.id,
+        name: acc.name || projectName(acc.brand || "Проект", acc.line || "nc"),
         brand: acc.brand || "",
         line: acc.line || "nc",
         contractor: acc.contractor || "",
@@ -598,7 +817,9 @@ export function attributeProjectVisits(projects: ProjectRef[], tables: Map<strin
       const host = hostOfSite(project.site);
       const split = peers.length > 1 && hosts.size > 1 && Boolean(host);
       if (peers.length > 1 && !split) sharedCounter = true;
-      const pair = split ? tables.get(`${counterId}|${host}`) : tables.get(counterId);
+      const splitPair = split ? tables.get(`${counterId}|${host}`) : undefined;
+      if (split && !splitPair) sharedCounter = true;
+      const pair = splitPair || tables.get(counterId);
       const current = metricRow(pair?.current);
       const previous = metricRow(pair?.previous);
       const currentVisits = current[0] || 0;
@@ -610,6 +831,7 @@ export function attributeProjectVisits(projects: ProjectRef[], tables: Map<strin
     }
     return {
       projectId: project.projectId,
+      name: project.name,
       brand: project.brand,
       line: project.line,
       contractor: project.contractor,
@@ -623,56 +845,6 @@ export function attributeProjectVisits(projects: ProjectRef[], tables: Map<strin
       sharedCounter
     };
   });
-}
-
-async function fetchVisitsOverview(
-  token: string,
-  counterId: string,
-  dates: { date1: string; date2: string },
-  host: string
-): Promise<MetrikaTable> {
-  const params: Record<string, string> = {
-    ids: counterId,
-    ...dates,
-    metrics: "ym:s:visits,ym:s:users,ym:s:bounceRate,ym:s:avgVisitDurationSeconds,ym:s:pageDepth"
-  };
-  if (host) params.filters = metrikaHostFilter(host);
-  return metrikaGetRetry(token, params);
-}
-
-async function fetchVisitsPairCached(
-  token: string,
-  counterId: string,
-  range: DateRange,
-  host: string
-): Promise<OverviewPair> {
-  const safeHost = host.replace(/[^a-z0-9.-]/gi, "_");
-  const file = path.join(cacheDir(), `ov_${counterId}_${safeHost}_${range.from}_${range.to}.json`);
-  try {
-    if (fs.existsSync(file)) {
-      const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { savedAt: number; current: MetrikaTable; previous: MetrikaTable };
-      if (Date.now() - Number(raw.savedAt || 0) < CACHE_TTL_MS && raw.current && raw.previous) {
-        return { current: raw.current, previous: raw.previous };
-      }
-    }
-  } catch {
-    /* кэш необязателен */
-  }
-  const current = await fetchVisitsOverview(token, counterId, { date1: range.from, date2: range.to }, host);
-  const previous = await fetchVisitsOverview(
-    token,
-    counterId,
-    { date1: range.previousFrom, date2: range.previousTo },
-    host
-  );
-  try {
-    const dir = cacheDir();
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ savedAt: Date.now(), current, previous }), "utf8");
-  } catch {
-    /* кэш необязателен */
-  }
-  return { current, previous };
 }
 
 export async function fetchMetrikaBehavior(
@@ -691,34 +863,26 @@ export async function fetchMetrikaBehavior(
   else quotaExceeded = false;
 
   const errors: string[] = [];
-  let quotaNoted = false;
-  const maybeSnapshots = await mapChunk(live, 1, async (acc) => {
+  const fromCache: string[] = [];
+  const missed: string[] = [];
+  const maybeSnapshots = await mapChunk(live, METRIKA_PARALLEL, async (acc) => {
     try {
       const snap = await fetchCounterSnapshot(acc, range);
-      if (snap.goalError) {
-        if (isQuotaError(snap.goalError)) {
-          if (!quotaNoted) {
-            errors.push("Метрика: суточная квота uid исчерпана, часть счётчиков из кэша или пропущена");
-            quotaNoted = true;
-          }
-        } else {
-          errors.push(`${acc.name} (${acc.counterId}): ${snap.goalError}`);
-        }
-      }
+      if (snap.goalError && isQuotaError(snap.goalError)) fromCache.push(`${acc.name} (${acc.counterId})`);
+      else if (snap.goalError) errors.push(`${acc.name} (${acc.counterId}): ${snap.goalError}`);
       return { acc, snap };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "ошибка";
-      if (isQuotaError(msg)) {
-        if (!quotaNoted) {
-          errors.push("Метрика: суточная квота uid исчерпана, оставшиеся счётчики не запрашиваются");
-          quotaNoted = true;
-        }
-        return null;
-      }
-      errors.push(`${acc.name} (${acc.counterId}): ${msg}`);
+      missed.push(`${acc.name} (${acc.counterId})`);
+      if (!isQuotaError(msg)) errors.push(`${acc.name} (${acc.counterId}): ${msg}`);
       return null;
     }
   });
+  if (fromCache.length || missed.length) {
+    errors.unshift(
+      `Метрика: суточная квота uid.${fromCache.length ? ` Из кэша: ${fromCache.join(", ")}.` : ""}${missed.length ? ` Не загрузились: ${missed.join(", ")}.` : ""}`
+    );
+  }
   const paired = maybeSnapshots.filter((s): s is NonNullable<typeof s> => Boolean(s));
   const snapshots = paired.map((item) => item.snap);
   if (!snapshots.length) {
@@ -887,26 +1051,13 @@ export async function fetchMetrikaBehavior(
         ]
       }
     });
-  }
-  if (!quotaExceeded) {
-    const byCounter = new Map(live.map((acc) => [acc.counterId, acc]));
-    for (const extra of filteredOverviewKeys(projectRefs)) {
-      const acc = byCounter.get(extra.counterId);
-      if (!acc) continue;
-      try {
-        const pair = await fetchVisitsPairCached(acc.token, extra.counterId, range, extra.host);
-        tables.set(extra.key, pair);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "ошибка";
-        if (isQuotaError(msg)) {
-          quotaExceeded = true;
-          if (!errors.some((line) => line.includes("квота"))) {
-            errors.push("Метрика: суточная квота uid исчерпана, визиты общих счётчиков не разрезаны по сайтам");
-          }
-          break;
-        }
-        errors.push(`${extra.host} (${extra.counterId}): визиты по сайту не отделились — ${msg}`);
-      }
+    for (const domain of item.snap.domains || []) {
+      const host = normalizeHostName(domain.host);
+      if (!host) continue;
+      tables.set(`${item.acc.counterId}|${host}`, {
+        current: { totals: [domain.visits, domain.users, domain.bounceRate, 0, 0, domain.calls] },
+        previous: { totals: [domain.previousVisits, 0, 0, 0, 0, domain.previousCalls] }
+      });
     }
   }
   return { snapshot, errors, projects: attributeProjectVisits(projectRefs, tables) };

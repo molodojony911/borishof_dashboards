@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { AppSettings, CalltouchAccount, DirectAccount, MetrikaAccount } from "./types";
 import { DEFAULT_THRESHOLDS } from "./defaults";
+import { canonicalBrand, exeedEsteoKind } from "./brand-alias";
 import { ACCOUNTS, toDirectAccounts, toMetrikaAccounts } from "./catalog";
 import { CALLTOUCH_CABINETS, toCalltouchAccounts } from "./calltouch-catalog";
 import { dataPath } from "./paths";
@@ -163,11 +164,15 @@ export function seedFromCatalog(base: AppSettings): AppSettings {
       catalogDirect.find(
         (item) =>
           item.clientLogin.toLowerCase() === (row.clientLogin || "").toLowerCase() &&
-          item.brand === row.brand &&
+          canonicalBrand(item.brand) === canonicalBrand(row.brand || "") &&
           item.line === row.line
       );
+    const brand = canonicalBrand(match?.brand || row.brand || "");
+    const renamed = Boolean(match && row.brand && row.brand !== brand);
     return {
       ...row,
+      brand,
+      name: renamed ? match?.name || row.name : row.name,
       line: row.line || match?.line || "nc",
       token: row.token || tokens[row.contractor] || "",
       goalCallId: match?.goalCallId || row.goalCallId
@@ -180,22 +185,41 @@ export function seedFromCatalog(base: AppSettings): AppSettings {
   const metrika = expandMetrika(metrikaSource);
   const catalogCalltouch = toCalltouchAccounts();
   const calltouchSource = base.calltouch.length ? base.calltouch : catalogCalltouch;
-  const calltouch = calltouchSource.map((row) => {
+  const calltouch: CalltouchAccount[] = calltouchSource.map((row) => {
     const match =
       catalogCalltouch.find((item) => item.id === row.id) ||
       catalogCalltouch.find((item) => item.siteId === row.siteId);
+    const brand = canonicalBrand(match?.brand || row.brand || "");
+    const renamed = Boolean(match && row.brand && row.brand !== brand);
     return {
       ...row,
-      name: row.name || match?.name || "",
-      brand: row.brand || match?.brand || "",
+      name: renamed ? match?.name || row.name : row.name || match?.name || "",
+      brand,
       contractor: row.contractor || match?.contractor || "",
       url: row.url || match?.url || "",
       qualityTags: row.qualityTags?.length ? row.qualityTags : match?.qualityTags || [],
       token: ""
     };
   });
-  persistCalltouchTokens(calltouchSource);
-  return { ...base, direct: filledDirect, metrika, calltouch };
+  for (const item of catalogCalltouch) {
+    const blob = `${item.id} ${item.brand} ${item.name} ${item.url}`;
+    if (exeedEsteoKind(blob) === "other") continue;
+    if (calltouch.some((row) => row.id === item.id || row.siteId === item.siteId)) continue;
+    calltouch.push({ ...item, token: "" });
+  }
+  persistCalltouchTokens(calltouchSource.filter((row) => !isRemovedBrand(row)));
+  return {
+    ...base,
+    direct: filledDirect.filter((row) => !isRemovedBrand(row)),
+    metrika: metrika.filter((row) => !isRemovedBrand(row)),
+    calltouch: calltouch.filter((row) => !isRemovedBrand(row))
+  };
+}
+
+/** Seres снят с дашборда: ни справочник, ни старый settings.json не должны его запрашивать. */
+function isRemovedBrand(row: { id?: string; brand?: string; name?: string; url?: string; siteId?: string; clientLogin?: string }): boolean {
+  const blob = `${row.id || ""} ${row.brand || ""} ${row.name || ""} ${row.url || ""} ${row.siteId || ""} ${row.clientLogin || ""}`.toLowerCase();
+  return blob.includes("seres") || blob.includes("borishof-seres") || blob.includes("66216");
 }
 
 function expandMetrika(source: MetrikaAccount[]): MetrikaAccount[] {
@@ -218,11 +242,18 @@ function expandMetrika(source: MetrikaAccount[]): MetrikaAccount[] {
     }
     const match =
       catalog.find((item) => item.id === row.id) ||
-      catalog.find((item) => item.counterId === row.counterId && item.line === row.line && item.brand === row.brand);
+      catalog.find(
+        (item) =>
+          item.counterId === row.counterId &&
+          item.line === row.line &&
+          canonicalBrand(item.brand || "") === canonicalBrand(row.brand || "")
+      );
+    const brand = canonicalBrand(match?.brand || row.brand || "");
+    const renamed = Boolean(match && row.brand && row.brand !== brand);
     push({
       ...row,
-      name: row.name || match?.name || "",
-      brand: row.brand || match?.brand,
+      name: renamed ? match?.name || row.name : row.name || match?.name || "",
+      brand,
       contractor: row.contractor || match?.contractor,
       line: row.line || match?.line,
       goalCallId: match?.goalCallId || row.goalCallId

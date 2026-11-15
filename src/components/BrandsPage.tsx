@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { canonicalBrand } from "@/lib/brand-alias";
 import { ACCOUNTS, LINE_LABEL } from "@/lib/catalog";
 import { PageIntro } from "./ui";
 import { buildQuery } from "@/lib/href";
@@ -17,7 +18,7 @@ export function BrandsPage() {
   const [plans, setPlans] = useState<PlanRow[]>([]);
   const contractor = search.get("contractor") || "";
   const line = search.get("line") || "";
-  const brand = search.get("brand") || "";
+  const brand = canonicalBrand(search.get("brand") || "");
   useEffect(() => {
     fetch("/api/plans")
       .then((res) => res.json())

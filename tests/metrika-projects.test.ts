@@ -87,16 +87,19 @@ describe("визиты Метрики по проектам", () => {
         urls.push(url);
         const parsed = new URL(url);
         const ids = parsed.searchParams.get("ids");
-        const filters = parsed.searchParams.get("filters") || "";
-        let visits = 0;
-        if (ids === "92549388" && filters.includes("sale.toyota-vnukovo.ru")) visits = 1500;
-        else if (ids === "92549388" && filters.includes("service-toyota-vnukovo.ru")) visits = 700;
-        else if (ids === "92549388") visits = 9999;
-        else if (ids === "96291650") visits = 3200;
-        return new Response(JSON.stringify({ totals: [visits, 10, 20, 30, 2], data: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
+        const dimensions = parsed.searchParams.get("dimensions") || "";
+        if (dimensions.includes("startURLDomain")) {
+          const toyota = [
+            { dimensions: [{ name: "2026-11-10" }, { name: "sale.toyota-vnukovo.ru" }], metrics: [1500, 10, 20, 30, 2] },
+            { dimensions: [{ name: "2026-11-10" }, { name: "service-toyota-vnukovo.ru" }], metrics: [700, 8, 40, 20, 1] }
+          ];
+          const haval = [
+            { dimensions: [{ name: "2026-11-10" }, { name: "haval-borishof.ru" }], metrics: [3200, 20, 30, 40, 2] }
+          ];
+          const data = ids === "92549388" ? toyota : haval;
+          return new Response(JSON.stringify({ totals: [], data }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ totals: [0], data: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
       })
     );
     const accounts: MetrikaAccount[] = [
@@ -134,19 +137,18 @@ describe("визиты Метрики по проектам", () => {
       const south = pack.projects.find((row) => row.projectId === "tandem-afs-toyota");
       const haval = pack.projects.find((row) => row.projectId === "tandem-nc-haval");
       expect(north?.visits).toBe(1500);
+      expect(north?.name).toContain("TOYOTA");
       expect(south?.visits).toBe(700);
       expect(haval?.visits).toBe(3200);
       const queries = urls.map((url) => new URL(url).searchParams);
-      expect(queries.some((params) => (params.get("metrics") || "").includes("ym:s:visits") && params.get("date1"))).toBe(true);
-      expect(
-        queries.some(
-          (params) =>
-            params.get("ids") === "92549388" &&
-            (params.get("filters") || "").includes("startURLDomain") &&
-            (params.get("filters") || "").includes("sale.toyota-vnukovo.ru")
-        )
-      ).toBe(true);
-      expect(queries.filter((params) => params.get("ids") === "96291650").every((params) => !params.get("filters"))).toBe(true);
+      const domainQueries = queries.filter((params) => (params.get("dimensions") || "").includes("startURLDomain"));
+      expect(domainQueries.every((params) => !params.get("filters"))).toBe(true);
+      expect(domainQueries.filter((params) => params.get("ids") === "92549388")).toHaveLength(1);
+      expect(domainQueries[0]?.get("date1")).toBeTruthy();
+      expect(domainQueries[0]?.get("dimensions")).toContain("ym:s:date");
+      const again = urls.length;
+      await fetchMetrikaBehavior(accounts, rangeFor("7d", new Date("2026-11-15T00:00:00Z")), 0);
+      expect(urls.length).toBe(again);
     } finally {
       vi.unstubAllGlobals();
       delete process.env.YANDEX_METRIKA_OAUTH_TOKEN;
