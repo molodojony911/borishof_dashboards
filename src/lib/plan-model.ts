@@ -6,9 +6,16 @@ export interface PlanRow {
   contractor: string;
   brand: string;
   line: Line | "";
+  /** План расхода. Сводный лист подрядчиков его не импортирует. */
   spend: number | null;
+  /**
+   * План результативных лидов (РЛ): штуки качественных лидов на месяц.
+   * В файле колонка может называться «лиды» или «план РЛ».
+   */
   leads: number | null;
   visits: number | null;
+  /** План CPL, рубли за один результативный лид. Не пропорционален дням. */
+  cpl: number | null;
 }
 
 export interface ClassifiedRow {
@@ -73,6 +80,10 @@ export interface PlanFact extends PlanRow {
   factSpend: number;
   factLeads: number;
   factVisits: number;
+  /** CPL выбранного окна: расход / результативные лиды. Темп месяца его не меняет. */
+  factCpl: number | null;
+  /** Прогноз РЛ на полный месяц, если текущий темп сохранится. */
+  forecastLeads: number | null;
 }
 
 export interface FactSlice {
@@ -99,8 +110,15 @@ const PLAN_FIELDS = {
   бюджет: "spend",
   leads: "leads",
   лиды: "leads",
+  "план рл": "rl",
+  "рл план": "rl",
+  рл: "rl",
   visits: "visits",
-  визиты: "visits"
+  визиты: "visits",
+  cpl: "cpl",
+  цпл: "cpl",
+  "план cpl": "cpl",
+  "cpl план": "cpl"
 } as const;
 
 const CLASSIFIED_FIELDS = {
@@ -171,24 +189,140 @@ function cell(row: string[], index: Record<string, number>, key: string): string
   return row[at] || "";
 }
 
-export function matrixToPlans(matrix: string[][]): PlanRow[] {
+const MONTH_NAMES: Array<[number, string[]]> = [
+  [1, ["январ", "янв"]],
+  [2, ["феврал", "фев"]],
+  [3, ["март", "мар"]],
+  [4, ["апрел", "апр"]],
+  [5, ["май", "мая"]],
+  [6, ["июн"]],
+  [7, ["июл"]],
+  [8, ["август", "авг"]],
+  [9, ["сентябр", "сен"]],
+  [10, ["октябр", "окт"]],
+  [11, ["ноябр", "ноя"]],
+  [12, ["декабр", "дек"]]
+];
+
+/** Заголовок колонки месяца: 2026-11, 11.2026, «ноя 2026». «мар» не путаем с «маркетинг». */
+export function monthFromHeader(raw: string): string {
+  const text = raw.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!text || text.length > 24) return "";
+  const iso = normalizeMonth(raw.trim());
+  if (iso && !/[a-zа-я]/i.test(raw)) return iso;
+  const dated = text.match(/(20\d{2})-(\d{2})-\d{2}/);
+  if (dated) return `${dated[1]}-${dated[2]}`;
+  const slash = text.match(/^(\d{1,2})\/(20\d{2})$/);
+  if (slash) return `${slash[2]}-${slash[1].padStart(2, "0")}`;
+  const year = text.match(/20\d{2}/);
+  if (!year) return "";
+  if (/маркет/.test(text)) return "";
+  for (const [month, names] of MONTH_NAMES) {
+    if (names.some((name) => text.includes(name))) return `${year[0]}-${String(month).padStart(2, "0")}`;
+  }
+  return "";
+}
+
+/**
+ * РЛ в сводке подрядчиков — результативные лиды, штуки на месяц.
+ * CPL — цена одного такого лида. «Расход/лиды» — это уже CPL, поэтому колонку расхода не берём.
+ * Строки и колонки со словом «факт» пропускаем: из листа нужен только план.
+ */
+export function classifyPlanMetric(raw: string): "rl" | "cpl" | "skip" {
+  const text = normHeader(raw);
+  if (!text || text.includes("факт")) return "skip";
+  const cpl = /\bcpl\b|цпл|стоимость лида|цена лида|цена рл|стоимость рл/.test(text);
+  const rl = /(^|[^а-яё])рл([^а-яё]|$)|результативн/.test(text);
+  if (cpl && !rl) return "cpl";
+  if (rl && !cpl) return "rl";
+  return "skip";
+}
+
+function isWidePlanSheet(matrix: string[][]): boolean {
+  return matrix.slice(0, 15).some((row) => row.filter((item) => monthFromHeader(item)).length >= 2);
+}
+
+function blankPlan(month: string, contractor: string, brand: string, line: Line | ""): PlanRow {
+  return { month, contractor, brand, line, spend: null, leads: null, visits: null, cpl: null };
+}
+
+function parseWidePlans(matrix: string[][]): PlanRow[] {
+  let headerAt = -1;
+  let monthCount = 0;
+  matrix.slice(0, 15).forEach((row, index) => {
+    const count = row.filter((item) => monthFromHeader(item)).length;
+    if (count > monthCount) {
+      monthCount = count;
+      headerAt = index;
+    }
+  });
+  if (headerAt < 0) return [];
+  const header = matrix[headerAt];
+  const months = header
+    .map((item, index) => ({ index, month: monthFromHeader(item) }))
+    .filter((item) => item.month);
+  const firstMonth = months[0].index;
+  const named = (names: string[]) => header.findIndex((item) => names.includes(normHeader(item)));
+  const metricCol = named(["показатель", "метрика", "план"]);
+  const metricAt = metricCol >= 0 ? metricCol : firstMonth - 1;
+  const contractorAt = named(["подрядчик", "contractor"]);
+  const brandAt = named(["бренд", "brand", "проект"]);
+  const lineAt = named(["линия", "направление", "line"]);
+  const map = new Map<string, PlanRow>();
+  for (const row of matrix.slice(headerAt + 1)) {
+    const metric = classifyPlanMetric(atCell(row, metricAt));
+    if (metric === "skip") continue;
+    const contractor = contractorAt >= 0 ? atCell(row, contractorAt).trim() : "";
+    const brand = brandAt >= 0 ? atCell(row, brandAt).trim() : atCell(row, 1).trim();
+    if (!brand) continue;
+    const line = lineAt >= 0 ? normalizeLine(atCell(row, lineAt)) : "";
+    for (const col of months) {
+      const value = parseNumberCell(atCell(row, col.index));
+      if (value == null) continue;
+      const key = `${col.month}|${contractor}|${brand}|${line}`;
+      const plan = map.get(key) || blankPlan(col.month, contractor, brand, line);
+      if (metric === "rl") plan.leads = value;
+      else plan.cpl = value;
+      map.set(key, plan);
+    }
+  }
+  return Array.from(map.values());
+}
+
+function atCell(row: string[], index: number): string {
+  if (index < 0) return "";
+  return row[index] || "";
+}
+
+export function matrixToPlans(matrix: string[][], opts?: { onlyRlCpl?: boolean }): PlanRow[] {
+  const rows = isWidePlanSheet(matrix) ? parseWidePlans(matrix) : parseLongPlans(matrix);
+  if (!opts?.onlyRlCpl) return rows;
+  return rows.map((row) => ({ ...row, spend: null, visits: null }));
+}
+
+function parseLongPlans(matrix: string[][]): PlanRow[] {
   if (matrix.length < 2) return [];
-  const index = headerIndex(matrix[0], PLAN_FIELDS);
-  if (index.month === undefined || index.brand === undefined) return [];
+  const headerAt = matrix.findIndex((row) => row.some((item) => PLAN_FIELDS[normHeader(item) as keyof typeof PLAN_FIELDS]));
+  if (headerAt < 0) return [];
+  const index = headerIndex(matrix[headerAt], PLAN_FIELDS);
+  if (index.brand === undefined) return [];
   const rows: PlanRow[] = [];
-  for (const line of matrix.slice(1)) {
-    const month = normalizeMonth(cell(line, index, "month"));
+  for (const line of matrix.slice(headerAt + 1)) {
+    const month = normalizeMonth(cell(line, index, "month")) || monthFromHeader(cell(line, index, "month"));
     const brand = cell(line, index, "brand").trim();
     const contractor = cell(line, index, "contractor").trim();
     if (!month || !brand) continue;
+    const rl = parseNumberCell(cell(line, index, "rl"));
+    const leads = parseNumberCell(cell(line, index, "leads"));
     rows.push({
       month,
       contractor,
       brand,
       line: normalizeLine(cell(line, index, "line")),
       spend: parseNumberCell(cell(line, index, "spend")),
-      leads: parseNumberCell(cell(line, index, "leads")),
-      visits: parseNumberCell(cell(line, index, "visits"))
+      leads: rl ?? leads,
+      visits: parseNumberCell(cell(line, index, "visits")),
+      cpl: parseNumberCell(cell(line, index, "cpl"))
     });
   }
   return rows;
@@ -442,14 +576,19 @@ export function joinPlanFact(plans: PlanRow[], facts: FactSlice[], month: string
           fact.brand === plan.brand &&
           (plan.line === "" || fact.line === plan.line)
       );
+      const factSpend = matched.reduce((sum, fact) => sum + fact.spend, 0);
+      const factLeads = matched.reduce((sum, fact) => sum + fact.leads, 0);
+      const factVisits = matched.reduce((sum, fact) => sum + fact.visits, 0);
       return {
         ...plan,
         periodSpend: prorate(plan.spend, periodDays, monthDays),
         periodLeads: prorate(plan.leads, periodDays, monthDays),
         periodVisits: prorate(plan.visits, periodDays, monthDays),
-        factSpend: matched.reduce((sum, fact) => sum + fact.spend, 0),
-        factLeads: matched.reduce((sum, fact) => sum + fact.leads, 0),
-        factVisits: matched.reduce((sum, fact) => sum + fact.visits, 0)
+        factSpend,
+        factLeads,
+        factVisits,
+        factCpl: factLeads > 0 ? factSpend / factLeads : null,
+        forecastLeads: periodDays > 0 ? (factLeads / periodDays) * monthDays : null
       };
     });
 }

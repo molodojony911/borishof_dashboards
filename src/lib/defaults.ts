@@ -24,7 +24,13 @@ export const DEFAULT_THRESHOLDS: AlertThresholds = {
   goalBreakDropPct: 50,
   anomalyZ: 3.5,
   minCallsBaseline: 25,
-  zeroImpressionMinPrev: 800
+  zeroImpressionMinPrev: 800,
+  planRlUnderPct: 20,
+  planRlCriticalPct: 35,
+  planCplOverPct: 25,
+  planCplCriticalPct: 45,
+  planRunRateMinDays: 7,
+  planRunRateMinLeads: 8
 };
 
 export const DEFAULT_QUALITY_TAGS = [...NC_QUALITY_TAGS, ...AFS_QUALITY_TAGS];
