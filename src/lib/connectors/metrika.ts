@@ -847,11 +847,12 @@ export function attributeProjectVisits(projects: ProjectRef[], tables: Map<strin
   });
 }
 
-/** Страница снята по счётчику. Один домен — сайт, несколько — общий счётчик, домены перечислены. */
-function pageSiteLabel(snap: CounterSnap, acc: MetrikaAccount): string {
-  const hosts = (snap.domains || []).filter((row) => row.visits > 0).map((row) => row.host).filter(Boolean);
-  if (hosts.length === 1) return hosts[0];
-  if (hosts.length > 1) return hosts.join(", ");
+/** Страница снята по счётчику. Подпись — сайты справочника на этом счётчике, без случайных доменов входа. */
+function pageSiteLabel(acc: MetrikaAccount): string {
+  const hosts = Array.from(
+    new Set(ACCOUNTS.filter((item) => item.counterIds.includes(acc.counterId)).map((item) => hostOfSite(item.site)).filter(Boolean))
+  );
+  if (hosts.length) return hosts.join(", ");
   return acc.name || acc.counterId;
 }
 
@@ -932,7 +933,7 @@ export async function fetchMetrikaBehavior(
     { site: string; path: string; visits: number; bounce: number; dur: number; depth: number; calls: number }
   >();
   for (const item of paired) {
-    const site = pageSiteLabel(item.snap, item.acc);
+    const site = pageSiteLabel(item.acc);
     for (const p of item.snap.pages) {
       const key = `${site}|${p.path}`;
       const cur = pageMap.get(key) || { site, path: p.path, visits: 0, bounce: 0, dur: 0, depth: 0, calls: 0 };
