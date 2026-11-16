@@ -89,6 +89,8 @@ export interface FunnelStep {
 export interface PageRow {
   path: string;
   title: string;
+  /** Домен, с которого снята строка. У общего счётчика здесь несколько хостов. */
+  site?: string;
   visits: number;
   bounceRate: number;
   avgDurationSec: number;

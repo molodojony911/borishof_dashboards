@@ -4,6 +4,7 @@ import { useDashboard } from "./useDashboard";
 import { Delta, PageIntro, StateScreen } from "./ui";
 import { FunnelChart } from "./Charts";
 import { num, pct, seconds } from "@/lib/format";
+import type { ProjectVisit } from "@/lib/types";
 
 export function BehaviorPage() {
   const { data, loading, error, refreshing } = useDashboard();
@@ -46,6 +47,8 @@ export function BehaviorPage() {
         Клики Директа {num(b.directClicks)} · визиты с Директа в Метрике {num(b.metrikaDirectVisits)}
         {loss > 10 ? <span className="text-rose-300"> · разрыв {pct(loss, 0)}</span> : null}
       </p>
+
+      <SitesInReport projects={data.projects || []} totalVisits={b.visits} health={data.health.find((row) => row.source === "metrika")?.message || ""} />
 
       {data.hypotheses?.length > 0 && (
         <section className="mt-10">
@@ -181,6 +184,7 @@ export function BehaviorPage() {
           <table className="w-full min-w-[860px] text-left text-sm">
             <thead className="text-[11px] uppercase tracking-[0.12em] text-mute">
               <tr>
+                <th className="py-2 font-normal">Сайт</th>
                 <th className="py-2 font-normal">Страница</th>
                 <th className="py-2 font-normal">Визиты</th>
                 <th className="py-2 font-normal">Отказы</th>
@@ -192,7 +196,8 @@ export function BehaviorPage() {
             </thead>
             <tbody>
               {b.pages.map((p) => (
-                <tr key={p.path} className="border-t border-white/[0.06]">
+                <tr key={`${p.site || ""}-${p.path}`} className="border-t border-white/[0.06]">
+                  <td className="py-2 text-mute">{p.site || "—"}</td>
                   <td className="py-2">
                     <div>{p.title}</div>
                     <div className="text-[11px] text-mute">{p.path}</div>
@@ -226,6 +231,70 @@ export function BehaviorPage() {
         </section>
       )}
     </>
+  );
+}
+
+function siteHost(site: string): string {
+  const raw = site.trim();
+  if (!raw) return "сайт не указан";
+  try {
+    return new URL(raw.startsWith("http") ? raw : `https://${raw}`).host.replace(/^www\./, "");
+  } catch {
+    return raw;
+  }
+}
+
+function siteStatus(row: ProjectVisit): string {
+  if (row.visits <= 0) return "не попал в отчёт";
+  if (row.sharedCounter) return "общий счётчик";
+  return "в отчёте";
+}
+
+function SitesInReport({ projects, totalVisits, health }: { projects: ProjectVisit[]; totalVisits: number; health: string }) {
+  const rows = [...projects].sort((a, b) => b.visits - a.visits || a.name.localeCompare(b.name, "ru"));
+  const loaded = rows.filter((row) => row.visits > 0);
+  const missed = rows.filter((row) => row.visits <= 0);
+  return (
+    <section className="mt-10">
+      <h2 className="mb-1 font-display text-xl">Сайты в этой выгрузке</h2>
+      <p className="mb-4 max-w-3xl text-sm text-mute">
+        В срез запрашивались сайты: {num(rows.length)}. С визитами: {num(loaded.length)}. Карточка «Визиты» ({num(totalVisits)}) считает счётчики один раз. Строка «не попал в отчёт» в посадочные и источники не входит.
+        {missed.length ? ` Без визитов: ${missed.map((row) => siteHost(row.site) || row.name).join(", ")}.` : ""}
+      </p>
+      {health ? <p className="mb-4 text-xs text-amber-200">{health.split(";")[0]}</p> : null}
+      {rows.length === 0 ? (
+        <p className="text-sm text-mute">Счётчики Метрики для этого фильтра не запрашивались.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[860px] text-left text-sm">
+            <thead className="text-[11px] uppercase tracking-[0.12em] text-mute">
+              <tr>
+                <th className="py-2 font-normal">Сайт</th>
+                <th className="py-2 font-normal">Проект</th>
+                <th className="py-2 font-normal">Счётчик</th>
+                <th className="py-2 font-normal">Визиты</th>
+                <th className="py-2 font-normal">Было</th>
+                <th className="py-2 font-normal">Лиды</th>
+                <th className="py-2 font-normal">Статус</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.projectId} className="border-t border-white/[0.06]">
+                  <td className="py-2">{siteHost(row.site)}</td>
+                  <td>{row.name || row.brand}</td>
+                  <td className="font-mono text-xs text-mute">{row.counterIds.join(", ") || "—"}</td>
+                  <td>{num(row.visits)}</td>
+                  <td className="text-mute">{num(row.previousVisits)}</td>
+                  <td>{num(row.goalLeads)}</td>
+                  <td className={row.visits <= 0 ? "text-rose-300" : "text-mute"}>{siteStatus(row)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 

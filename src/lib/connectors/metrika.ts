@@ -847,6 +847,14 @@ export function attributeProjectVisits(projects: ProjectRef[], tables: Map<strin
   });
 }
 
+/** Страница снята по счётчику. Один домен — сайт, несколько — общий счётчик, домены перечислены. */
+function pageSiteLabel(snap: CounterSnap, acc: MetrikaAccount): string {
+  const hosts = (snap.domains || []).filter((row) => row.visits > 0).map((row) => row.host).filter(Boolean);
+  if (hosts.length === 1) return hosts[0];
+  if (hosts.length > 1) return hosts.join(", ");
+  return acc.name || acc.counterId;
+}
+
 export async function fetchMetrikaBehavior(
   accounts: MetrikaAccount[],
   range: DateRange,
@@ -921,17 +929,19 @@ export async function fetchMetrikaBehavior(
 
   const pageMap = new Map<
     string,
-    { visits: number; bounce: number; dur: number; depth: number; calls: number }
+    { site: string; path: string; visits: number; bounce: number; dur: number; depth: number; calls: number }
   >();
-  for (const s of snapshots) {
-    for (const p of s.pages) {
-      const cur = pageMap.get(p.path) || { visits: 0, bounce: 0, dur: 0, depth: 0, calls: 0 };
+  for (const item of paired) {
+    const site = pageSiteLabel(item.snap, item.acc);
+    for (const p of item.snap.pages) {
+      const key = `${site}|${p.path}`;
+      const cur = pageMap.get(key) || { site, path: p.path, visits: 0, bounce: 0, dur: 0, depth: 0, calls: 0 };
       cur.visits += p.visits;
       cur.bounce += p.bounceRate * p.visits;
       cur.dur += p.avgDurationSec * p.visits;
       cur.depth += p.pageDepth * p.visits;
       cur.calls += p.calls;
-      pageMap.set(p.path, cur);
+      pageMap.set(key, cur);
     }
   }
 
@@ -989,10 +999,11 @@ export async function fetchMetrikaBehavior(
       { id: "goal", name: "Лиды Метрики", value: Math.round(sum.calls), previous: Math.round(sum.previousCalls) },
       { id: "quality", name: "Качественный лид", value: 0, previous: 0 }
     ],
-    pages: Array.from(pageMap.entries())
-      .map(([path, v]) => ({
-        path,
-        title: path,
+    pages: Array.from(pageMap.values())
+      .map((v) => ({
+        path: v.path,
+        title: v.path,
+        site: v.site,
         visits: v.visits,
         bounceRate: v.visits ? v.bounce / v.visits : 0,
         avgDurationSec: v.visits ? v.dur / v.visits : 0,

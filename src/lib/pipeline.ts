@@ -425,7 +425,7 @@ function cacheDir(): string {
 
 function cacheFile(range: DateRange, filter: DashboardFilter): string {
   const key = [range.key, filter.contractor || "all", filter.line || "all", filter.brand || "all"].join("_");
-  return dataPath("cache", `dashboard-v14-${key}.json`);
+  return dataPath("cache", `dashboard-v15-${key}.json`);
 }
 
 /** Визиты общего счётчика считаем один раз, иначе бренд удваивает трафик. */
