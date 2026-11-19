@@ -11,6 +11,7 @@ import {
   LineChart,
   PhoneCall,
   Sparkles,
+  MapPin,
   Store,
   Target
 } from "lucide-react";
@@ -25,6 +26,7 @@ const NAV = [
   { href: "/leads", label: "Лиды", icon: PhoneCall },
   { href: "/classifieds", label: "Классифайды", icon: Store },
   { href: "/behavior", label: "Поведение", icon: Activity },
+  { href: "/maps", label: "Яндекс Бизнес", icon: MapPin },
   { href: "/insights", label: "Инсайты", icon: Sparkles },
   { href: "/alerts", label: "Алерты", icon: Bell },
   { href: "/setup", label: "Подключение", icon: Cable }

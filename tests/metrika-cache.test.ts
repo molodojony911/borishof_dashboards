@@ -6,6 +6,9 @@ import {
   aggregateDomainDays,
   fetchMetrikaBehavior,
   metrikaCacheTtlMs,
+  moscowToday,
+  orderMissedFirst,
+  readMissedCounters,
   rowsFromDomainDayTable
 } from "../src/lib/connectors/metrika";
 import { rangeFor } from "../src/lib/period";
@@ -84,6 +87,63 @@ describe("кэш и разбор Метрики", () => {
       const second = await fetchMetrikaBehavior(accounts, range, 0);
       expect(second.projects.find((row) => row.projectId === "tandem-nc-haval")?.visits).toBe(3200);
       expect(second.errors.join(" ")).toMatch(/кэш|Не загрузились|квота/);
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.YANDEX_METRIKA_OAUTH_TOKEN;
+      delete process.env.BORISHOF_DATA_DIR;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 20000);
+});
+
+describe("пропущенные счётчики", () => {
+  it("вчерашний пропуск идёт раньше сегодняшнего", () => {
+    const ordered = orderMissedFirst(
+      [{ counterId: "a" }, { counterId: "b" }, { counterId: "c" }],
+      [
+        { counterId: "c", name: "C", missedOn: "2026-11-18", reason: "429" },
+        { counterId: "a", name: "A", missedOn: "2026-11-19", reason: "403" }
+      ],
+      "2026-11-19"
+    );
+    expect(ordered.map((row) => row.counterId)).toEqual(["c", "a", "b"]);
+  });
+
+  it("на следующий день сначала запрашивает пропущенный кабинет и снимает его после успеха", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "borishof-metrika-priority-"));
+    process.env.BORISHOF_DATA_DIR = tmp;
+    process.env.YANDEX_METRIKA_OAUTH_TOKEN = "test-token";
+    const day = moscowToday();
+    const yesterday = new Date(`${day}T00:00:00Z`);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const missedOn = yesterday.toISOString().slice(0, 10);
+    fs.mkdirSync(path.join(tmp, "cache", "metrika"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, "cache", "metrika", "missed-counters.json"),
+      JSON.stringify({ counters: [{ counterId: "222", name: "BMW · NC", missedOn, reason: "429" }] })
+    );
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const id = new URL(String(input)).searchParams.get("ids") || "";
+        if (!seen.includes(id)) seen.push(id);
+        return new Response(
+          JSON.stringify({
+            data: [{ dimensions: [{ name: "2026-11-10" }, { name: "example.ru" }], metrics: [12, 1, 1, 1, 1] }]
+          }),
+          { status: 200 }
+        );
+      })
+    );
+    const accounts: MetrikaAccount[] = [
+      { id: "ym-a", name: "HAVAL · NC", counterId: "111", token: "", brand: "HAVAL", contractor: "Tandem", line: "nc" },
+      { id: "ym-b", name: "BMW · NC", counterId: "222", token: "", brand: "BMW", contractor: "Tandem", line: "nc" }
+    ];
+    try {
+      await fetchMetrikaBehavior(accounts, range, 0);
+      expect(seen[0]).toBe("222");
+      expect(readMissedCounters().some((row) => row.counterId === "222")).toBe(false);
     } finally {
       vi.unstubAllGlobals();
       delete process.env.YANDEX_METRIKA_OAUTH_TOKEN;
