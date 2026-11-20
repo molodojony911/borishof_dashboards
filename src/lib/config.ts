@@ -159,10 +159,20 @@ export function loadDirectTokens(): Record<string, string> {
  * 3. data/direct-tokens.json, если это не указатель _movedTo.
  * 4. Поле кабинета в настройках, если это не маска.
  */
-export function resolveDirectToken(account: Pick<DirectAccount, "token" | "contractor">): string {
-  const fromEnv = pickToken(directTokensFromEnv(), account.contractor);
+export function resolveDirectToken(
+  account: Pick<DirectAccount, "token" | "contractor"> & { clientLogin?: string }
+): string {
+  const login = (account.clientLogin || "").trim();
+  const envTokens = directTokensFromEnv();
+  const fileTokens = loadDirectTokens();
+  // Отдельный ключ кабинета важнее токена подрядчика: агентский токен этот логин может не видеть.
+  const fromEnvLogin = pickToken(envTokens, login);
+  if (fromEnvLogin) return fromEnvLogin;
+  const fromFileLogin = pickToken(fileTokens, login);
+  if (fromFileLogin) return fromFileLogin;
+  const fromEnv = pickToken(envTokens, account.contractor);
   if (fromEnv) return fromEnv;
-  const fromFile = pickToken(loadDirectTokens(), account.contractor);
+  const fromFile = pickToken(fileTokens, account.contractor);
   if (fromFile) return fromFile;
   const own = (account.token || "").trim();
   if (own && !isMasked(own)) return own;
@@ -231,7 +241,7 @@ export function seedFromCatalog(base: AppSettings): AppSettings {
   const tokens = loadDirectTokens();
   const direct = base.direct.length ? base.direct : toDirectAccounts(tokens);
   const catalogDirect = toDirectAccounts(tokens);
-  const filledDirect = direct.map((row) => {
+  const filledDirect: DirectAccount[] = direct.map((row) => {
     const match =
       catalogDirect.find((item) => item.id === row.id) ||
       catalogDirect.find(
@@ -254,6 +264,12 @@ export function seedFromCatalog(base: AppSettings): AppSettings {
     const cat = ACCOUNTS.find((a) => a.id === row.id || a.clientLogin === row.clientLogin);
     return !cat?.skipDirect;
   });
+  for (const item of catalogDirect) {
+    const known = filledDirect.some(
+      (row) => row.id === item.id || (row.clientLogin || "").toLowerCase() === item.clientLogin.toLowerCase()
+    );
+    if (!known) filledDirect.push(item);
+  }
   const metrikaSource = base.metrika.length ? base.metrika : toMetrikaAccounts("");
   const metrika = expandMetrika(metrikaSource);
   const catalogCalltouch = toCalltouchAccounts();

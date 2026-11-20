@@ -5,7 +5,7 @@ export interface CatalogAccount {
   id: string;
   brand: string;
   line: Line;
-  contractor: "Tandem" | "RTA";
+  contractor: "Tandem" | "RTA" | "GAC";
   clientLogin: string;
   /**
    * Логины до переезда на porg-*. В API не запрашиваются: они уже не существуют
@@ -371,6 +371,16 @@ export const ACCOUNTS: CatalogAccount[] = [
     site: "https://service.borishof-volt.ru/",
     legalEntity: "БорисХоф Холдинг",
     monthlyBudget: 80000
+  },
+  {
+    id: "gac-nc",
+    brand: "GAC",
+    line: "nc",
+    contractor: "GAC",
+    clientLogin: "porg-lya5nynj",
+    counterIds: [],
+    site: "https://gac-moscow.borishof.ru/",
+    legalEntity: "БорисХоф Холдинг"
   }
 ];
 

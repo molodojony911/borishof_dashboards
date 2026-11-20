@@ -69,6 +69,16 @@ describe("секреты из окружения", () => {
     expect(resolveMetrikaToken("from-ui")).toBe("metrika-file");
     expect(resolveDirectToken({ contractor: "Tandem", token: "from-ui" })).toBe("tandem-file");
     expect(resolveDirectToken({ contractor: "RTA", token: "" })).toBe("rta-file");
+    fs.writeFileSync(
+      path.join(dir, "tokens.json"),
+      JSON.stringify({
+        metrika: "metrika-file",
+        direct: { Tandem: "tandem-file", RTA: "rta-file", "porg-lya5nynj": "gac-file" },
+        calltouch: { "47639": "call-file" }
+      })
+    );
+    expect(resolveDirectToken({ contractor: "Tandem", clientLogin: "porg-lya5nynj", token: "from-ui" })).toBe("gac-file");
+    expect(resolveDirectToken({ contractor: "Tandem", clientLogin: "porg-other", token: "" })).toBe("tandem-file");
     expect(resolveCalltouchToken({ siteId: "47639", token: "from-ui" })).toBe("call-file");
     process.env.YANDEX_METRIKA_OAUTH_TOKEN = "metrika-env";
     process.env.YANDEX_DIRECT_TANDEM_OAUTH_TOKEN = "tandem-env";

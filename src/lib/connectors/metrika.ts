@@ -125,6 +125,51 @@ function readQuotaBlock(): boolean {
   }
 }
 
+export interface MissedCounter {
+  counterId: string;
+  name: string;
+  missedOn: string;
+  reason: string;
+}
+
+function missedFile(): string {
+  return dataPath("cache", "metrika", "missed-counters.json");
+}
+
+export function readMissedCounters(): MissedCounter[] {
+  try {
+    const file = missedFile();
+    if (!fs.existsSync(file)) return [];
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { counters?: MissedCounter[] };
+    return (raw.counters || []).filter((row) => row && row.counterId && row.missedOn);
+  } catch {
+    return [];
+  }
+}
+
+function writeMissedCounters(counters: MissedCounter[]): void {
+  try {
+    const dir = cacheDir();
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(missedFile(), JSON.stringify({ counters }), "utf8");
+  } catch {
+    /* список необязателен */
+  }
+}
+
+/** Пропуск прошлого дня идёт первым. Пропуск сегодняшнего дня ждёт следующих суток. */
+export function orderMissedFirst<T extends { counterId: string }>(
+  accounts: T[],
+  missed: MissedCounter[],
+  today: string
+): T[] {
+  const due = new Set(missed.filter((row) => row.missedOn < today).map((row) => row.counterId));
+  return accounts
+    .map((account, index) => ({ account, index, priority: due.has(account.counterId) ? 0 : 1 }))
+    .sort((a, b) => a.priority - b.priority || a.index - b.index)
+    .map((row) => row.account);
+}
+
 function markQuotaExceeded(): void {
   quotaExceeded = true;
   try {
@@ -871,26 +916,48 @@ export async function fetchMetrikaBehavior(
   if (readQuotaBlock()) quotaExceeded = true;
   else quotaExceeded = false;
 
+  const today = moscowToday();
+  const pending = new Map(readMissedCounters().map((row) => [row.counterId, row]));
+  const ordered = orderMissedFirst(live, Array.from(pending.values()), today);
+  let deferred = false;
+  const rememberMiss = (acc: { counterId: string; name?: string }, reason: string) => {
+    deferred = true;
+    pending.set(acc.counterId, {
+      counterId: acc.counterId,
+      name: acc.name || acc.counterId,
+      missedOn: today,
+      reason: reason.slice(0, 180)
+    });
+  };
+
   const errors: string[] = [];
   const fromCache: string[] = [];
   const missed: string[] = [];
-  const maybeSnapshots = await mapChunk(live, METRIKA_PARALLEL, async (acc) => {
+  const maybeSnapshots = await mapChunk(ordered, METRIKA_PARALLEL, async (acc) => {
     try {
       const snap = await fetchCounterSnapshot(acc, range);
-      if (snap.goalError && isQuotaError(snap.goalError)) fromCache.push(`${acc.name} (${acc.counterId})`);
+      const blocked = Boolean(snap.goalError) && (isQuotaError(snap.goalError) || /403|access denied|forbidden/i.test(snap.goalError));
+      if (blocked && isQuotaError(snap.goalError)) fromCache.push(`${acc.name} (${acc.counterId})`);
       else if (snap.goalError) errors.push(`${acc.name} (${acc.counterId}): ${snap.goalError}`);
+      if (blocked) rememberMiss(acc, snap.goalError);
+      else pending.delete(acc.counterId);
       return { acc, snap };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "ошибка";
       missed.push(`${acc.name} (${acc.counterId})`);
+      rememberMiss(acc, msg);
       if (!isQuotaError(msg)) errors.push(`${acc.name} (${acc.counterId}): ${msg}`);
       return null;
     }
   });
+  writeMissedCounters(Array.from(pending.values()));
+  const tomorrow = deferred ? " На следующий день эти кабинеты пойдут первыми." : "";
   if (fromCache.length || missed.length) {
     errors.unshift(
-      `Метрика: суточная квота uid.${fromCache.length ? ` Из кэша: ${fromCache.join(", ")}.` : ""}${missed.length ? ` Не загрузились: ${missed.join(", ")}.` : ""}`
+      `Метрика: суточная квота uid.${fromCache.length ? ` Из кэша: ${fromCache.join(", ")}.` : ""}${missed.length ? ` Не загрузились: ${missed.join(", ")}.` : ""}${tomorrow}`
     );
+  } else if (deferred) {
+    errors.unshift(`Метрика: часть кабинетов не выгрузилась.${tomorrow}`);
   }
   const paired = maybeSnapshots.filter((s): s is NonNullable<typeof s> => Boolean(s));
   const snapshots = paired.map((item) => item.snap);
