@@ -38,7 +38,7 @@ npm run dev
 
 1. Именная переменная окружения, если она не пустая.
 2. JSON-переменная, если она есть: `YANDEX_DIRECT_TOKENS`, `CALLTOUCH_TOKENS`.
-3. `data/tokens.json`: Метрика в `metrika`, Директ в `direct`, Calltouch в `calltouch` по siteId.
+3. `data/tokens.json`: Метрика в `metrika`, Директ в `direct`, Calltouch в `calltouch` по siteId. В `direct` ключ может быть не только подрядчиком, но и логином кабинета (`porg-...`): такой токен используется только для этого логина и важнее токена Tandem или RTA.
 4. Старый файл `data/direct-tokens.json` или `data/calltouch-tokens.json`, если это не указатель `_movedTo`.
 5. Поле кабинета в `data/settings.json`, если это не маска `••••`.
 
